@@ -1,0 +1,27 @@
+from typing import TypedDict, Literal, Optional, Any
+
+class AgentState(TypedDict):
+    # Perception Node
+    frame: Optional[Any]  # numpy array
+    fall_detected: bool
+    pose_data: dict
+    no_movement_seconds: float
+    track_id: Optional[int]
+    annotated_frame: Optional[Any]  # numpy array
+
+    # Analysis Node
+    scene_description: str
+    estimated_age: Literal["child", "adult", "elderly", "unknown"]
+    location_type: Literal["stairs", "bathroom", "hallway", "outdoor", "other"]
+    hazards_detected: list[str]
+
+    # Decision Node
+    severity: Literal["LOW", "MEDIUM", "HIGH"]
+    severity_score: int
+    recommended_actions: list[str]
+    auto_action_required: bool
+
+    # Action Node
+    actions_taken: list[dict]
+    incident_id: Optional[str]
+    snapshot_path: Optional[str]

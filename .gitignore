@@ -1,0 +1,52 @@
+# AI Fall Detection Project Git Ignore
+# Generated to protect sensitive data and prevent uploading huge model/video files
+
+# Python Environments & Caches
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Sensitive Data & Keys
+.env
+secret.json
+credentials.json
+
+# Database & Logs
+incidents.db
+logs/
+run/
+*.log
+
+# Heavy Machine Learning Models & Weights
+models/*.pt
+models/*.onnx
+*.weights
+
+# Datasets, Input & Output Videos
+input/*.mp4
+input/*.avi
+output/*.mp4
+output/*.avi
+snapshots/
+reports/
+tmp/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Frontend / Next.js (already covered in frontend/.gitignore, but good to have)
+node_modules/
+.next/
+out/
+build/
