@@ -23,7 +23,7 @@
 ## 📺 시스템 구동 화면
 
 <div align="center">
-  <img src="figures/main_web.png" alt="System Demo" width="1000" />
+  <img src="figures/website.png" alt="System Demo" width="1000" />
   <br/>
   <sub><b>다중 구역(Multi-Zone) 모니터링 관제 대시보드</b><br/>복도·병실·야외 등 다중 CCTV 영상을 스크롤 없이 한눈에 파악할 수 있는 다크 그레이 테마의 통합 관제 UI</sub>
 </div>
