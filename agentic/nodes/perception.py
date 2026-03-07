@@ -5,10 +5,9 @@ class PerceptionNode:
     """YOLO Pose 기반 낙상 감지"""
 
     VELOCITY_THRESHOLD = 15
-    VELOCITY_THRESHOLD = 15
-    ANGLE_THRESHOLD = 45  # Raised to 45 to prevent squatting from being classified as a fall
-    CONFIRM_FRAMES = 15   # Restored to 15
-    COOLDOWN_FRAMES = 60  # Cooldown of 3 seconds (assuming 20fps) to prevent spam
+    ANGLE_THRESHOLD = 35   # 낮출수록 더 잘 감지 (45→35: 완만히 누운 자세도 포착)
+    CONFIRM_FRAMES = 5     # 연속 프레임 수 완화 (15→5)
+    COOLDOWN_FRAMES = 60   # Cooldown of 3 seconds (assuming 20fps) to prevent spam
 
     def __init__(self, model_path: str):
         self.model = YOLO(model_path)
@@ -45,6 +44,16 @@ class PerceptionNode:
                 left_shoulder, right_shoulder = kps[5], kps[6]
                 left_hip, right_hip = kps[11], kps[12]
 
+                # 키포인트 신뢰도 체크
+                confs = None
+                if results[0].keypoints.conf is not None:
+                    confs = results[0].keypoints.conf.cpu().numpy()
+                    kp_idx = list(results[0].boxes.id.int().cpu().tolist()).index(tid)
+                    nose_conf  = confs[kp_idx][0]
+                    hip_conf   = confs[kp_idx][11]
+                    if nose_conf < 0.3 or hip_conf < 0.3:
+                        continue
+
                 if nose[0] == 0 or left_hip[0] == 0:
                     continue
 
@@ -74,16 +83,23 @@ class PerceptionNode:
                 if is_lying:
                     self.fall_duration_counter[tid] += 1
                 else:
-                    self.fall_duration_counter[tid] = 0
+                    # 즉시 리셋 대신 서서히 감소 (하이스테리시스)
+                    # → 1~2프레임 오감지가 있어도 카운터가 유지됨
+                    self.fall_duration_counter[tid] = max(0, self.fall_duration_counter[tid] - 1)
+
+                # 디버그 로그: 각도와 카운터 상태 출력
+                print(f"[Perception] ID={tid} 각도={angle:.1f}° (임계={self.ANGLE_THRESHOLD}) "
+                      f"누움={is_lying} 카운터={self.fall_duration_counter[tid]}/{self.CONFIRM_FRAMES} "
+                      f"쿨다운={self.cooldown_counter[tid]}")
 
                 # Check logic with cooldown
                 if self.fall_duration_counter[tid] > self.CONFIRM_FRAMES and self.cooldown_counter[tid] == 0:
                     fall_detected = True
                     track_id = tid
-                    
+
                     # Prevent instant re-triggering for the same fall
                     self.cooldown_counter[tid] = self.COOLDOWN_FRAMES
-                    
+
                     # 20fps 기준 프레임 → 초 변환
                     no_movement_seconds = self.fall_duration_counter[tid] / 20.0
                     pose_data = {
@@ -91,6 +107,7 @@ class PerceptionNode:
                         "velocity": velocity,
                         "keypoints": kps.tolist()
                     }
+                    print(f"🚨 [Perception] 낙상 감지! ID={tid}, 각도={angle:.1f}°, 지속={no_movement_seconds:.1f}s")
                     break
 
         return {

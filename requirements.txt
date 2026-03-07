@@ -1,0 +1,21 @@
+# ── Core AI / Computer Vision ──────────────────────────────────────
+ultralytics          # YOLOv8 / YOLO11 pose estimation
+torch                # PyTorch (Florence-2, transformers 백엔드)
+torchvision          # torch 보조 라이브러리
+transformers         # Florence-2 VLM
+Pillow               # 이미지 처리 (PIL)
+opencv-python        # 영상 처리 (cv2)
+cvzone               # OpenCV 유틸리티
+
+# ── Agentic Framework ───────────────────────────────────────────────
+langgraph            # LangGraph 에이전트 워크플로우
+langchain-core       # LangGraph 의존성
+
+# ── Backend ─────────────────────────────────────────────────────────
+fastapi              # REST API 서버
+uvicorn[standard]    # ASGI 서버
+python-dotenv        # .env 환경변수 로드
+
+# ── Utilities ───────────────────────────────────────────────────────
+numpy                # 수치 연산
+requests             # Slack Webhook HTTP 요청 (선택)

@@ -1,40 +1,46 @@
+import random
+
 def decision_node(state: dict) -> dict:
     """
     심각도 점수 계산 및 대응 방식 결정
 
     점수 계산:
-    - base: no_movement_seconds * 2 (최대 60점)
-    - elderly: +20점
-    - stairs/bathroom: +15점
-    - hazards: +5점
+    - base: 기본 40점 + 각도/속도 추가 점수 + 랜덤 노이즈
+    - elderly: +15점
+    - stairs/bathroom: +10점
+    - hazards: +10점
 
     판정:
-    - 0-40: LOW
-    - 41-70: MEDIUM
-    - 71-100: HIGH
+    - 0-50: LOW
+    - 51-75: MEDIUM (Warning)
+    - 76-100: HIGH (Critical)
     """
     no_movement = state.get("no_movement_seconds", 0)
     age = state.get("estimated_age", "unknown")
     location = state.get("location_type", "other")
     hazards = state.get("hazards_detected", [])
+    pose_data = state.get("pose_data", {})
 
-    # 점수 계산
-    # base_score = min(no_movement * 2, 60)
-    # 테스트 시 배점 크게 올리기: 1초만 누워있어도 15점 획득 (4초면 60점 만점)
-    # base_score = min(no_movement * 15, 60)
-    base_score = 80
+    angle = pose_data.get("angle", 40)
+    velocity = abs(pose_data.get("velocity", 0))
 
-    age_bonus = 20 if age == "elderly" else 0
-    location_bonus = 15 if location in ["stairs", "bathroom"] else 0
-    hazard_bonus = 5 if len(hazards) > 0 else 0
+    # 기본 점수: 각도가 심할수록, 쓰러지는 속도가 빠를수록 증가 (최소 40 ~ 75)
+    angle_bonus = min((angle - 35) * 0.6, 20) if angle > 35 else 0
+    vel_bonus = min(velocity * 0.5, 15)
+    
+    base_score = 40 + angle_bonus + vel_bonus + random.randint(-5, 5)
+
+    age_bonus = 15 if age == "elderly" else 0
+    location_bonus = 10 if location in ["stairs", "bathroom"] else 0
+    hazard_bonus = 10 if len(hazards) > 0 else 0
 
     total_score = int(base_score + age_bonus + location_bonus + hazard_bonus)
-    total_score = min(total_score, 100)
+    total_score = max(0, min(total_score, 100))
 
-    # 심각도 판정
-    if total_score <= 40:
+    # 심각도 판정 (완화된 기준)
+    if total_score <= 50:
         severity = "LOW"
-    elif total_score <= 70:
+    elif total_score <= 75:
         severity = "MEDIUM"
     else:
         severity = "HIGH"

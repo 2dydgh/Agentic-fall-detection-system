@@ -3,6 +3,8 @@ import cv2
 import json
 import sqlite3
 import asyncio
+import threading
+import queue
 from fastapi import FastAPI, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -17,10 +19,9 @@ load_dotenv()
 
 app = FastAPI(title="Fall Detection API")
 
-# Setup CORS to allow Next.js frontend to access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, restrict to frontend URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,19 +30,6 @@ app.add_middleware(
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 model_path = os.path.join(base_dir, "models/yolov26n-pose.pt")
 db_path = os.path.join(base_dir, "incidents.db")
-
-graph = create_fall_detection_graph(
-    model_path=model_path,
-    db_path=db_path,
-    slack_webhook=os.getenv("SLACK_WEBHOOK_URL"),
-    email_sender=os.getenv("EMAIL_SENDER"),
-    email_password=os.getenv("EMAIL_PASSWORD"),
-    email_receiver=os.getenv("EMAIL_RECEIVER"),
-    skip_vlm=False
-)
-
-# Global variables for streaming state
-active_camera = None
 
 def get_db_connection():
     conn = sqlite3.connect(db_path)
@@ -58,17 +46,16 @@ def get_recent_incidents(limit: int = 20):
     try:
         conn = get_db_connection()
         logs = conn.execute(
-            "SELECT * FROM incidents ORDER BY timestamp DESC LIMIT ?", 
+            "SELECT * FROM incidents ORDER BY timestamp DESC LIMIT ?",
             (limit,)
         ).fetchall()
-        
-        # 실제 누적 통계치 계산
+
         total_count = conn.execute("SELECT COUNT(*) FROM incidents").fetchone()[0]
         high_count = conn.execute("SELECT COUNT(*) FROM incidents WHERE severity='HIGH'").fetchone()[0]
         medium_count = conn.execute("SELECT COUNT(*) FROM incidents WHERE severity='MEDIUM'").fetchone()[0]
-        
+
         conn.close()
-        
+
         formatted_logs = []
         for log in logs:
             d = dict(log)
@@ -78,7 +65,7 @@ def get_recent_incidents(limit: int = 20):
                 "severity": d.get("severity", "LOW"),
                 "score": d.get("severity_score", 0)
             })
-            
+
         return {
             "total": total_count,
             "high": high_count,
@@ -88,126 +75,258 @@ def get_recent_incidents(limit: int = 20):
     except Exception as e:
         return {"error": str(e)}
 
-async def generate_frames(video_source):
-    """비디오 프레임을 가져와 LangGraph를 돌리고 MJPEG 형식으로 변환하여 송출"""
+
+class VideoStream:
+    """
+    백그라운드 스레드에서 YOLO 추론을 실행하고,
+    스트리밍은 원본 비디오 속도로 독립적으로 동작하는 클래스.
     
-    # 각 스트림마다 독립적인 그래프 엔진을 가동해야 메모리 간섭이 없음
-    local_graph = create_fall_detection_graph(
-        model_path=model_path,
-        db_path=db_path,
-        slack_webhook=os.getenv("SLACK_WEBHOOK_URL"),
-        email_sender=os.getenv("EMAIL_SENDER"),
-        email_password=os.getenv("EMAIL_PASSWORD"),
-        email_receiver=os.getenv("EMAIL_RECEIVER"),
-        skip_vlm=False
-    )
-    
-    # For testing, we can use 0 for webcam or a specific test video file path
+    - reader_thread: 비디오 프레임을 읽어 inference_queue에 넣음
+    - inference_thread: YOLO+LangGraph 추론 후 latest_annotated 업데이트
+    - generate(): 최신 annotated 프레임을 MJPEG으로 스트림
+    """
+
+    FRAME_SKIP = 8      # 추론 스킵 (8프레임마다 YOLO 실행)
+    WIDTH = 320         # 480 -> 320 (품질 낮춤)
+    HEIGHT = 240        # 360 -> 240 (품질 낮춤)
+    TARGET_FPS = 20.0   # 스트림 목표 FPS
+
+    def __init__(self, video_source: str):
+        self.video_source = video_source
+        self.stopped = False
+
+        # 최신 annotated 프레임 (스트리밍 스레드가 읽음)
+        self.latest_annotated: bytes | None = None
+        self.latest_lock = threading.Lock()
+
+        # 추론 입력 큐 (maxsize=1 → 항상 최신 프레임만 처리)
+        self.inference_queue: queue.Queue = queue.Queue(maxsize=1)
+
+        # 알럿 상태 (inference 스레드에서 업데이트, 읽기 스레드에서 오버레이)
+        self.alert_frames_remaining = 0
+        self.last_severity = "LOW"
+        self.last_score = 0
+
+        # LangGraph 그래프 (추론 스레드 전용)
+        self.graph = create_fall_detection_graph(
+            model_path=model_path,
+            db_path=db_path,
+            slack_webhook=os.getenv("SLACK_WEBHOOK_URL"),
+            email_sender=os.getenv("EMAIL_SENDER"),
+            email_password=os.getenv("EMAIL_PASSWORD"),
+            email_receiver=os.getenv("EMAIL_RECEIVER"),
+            skip_vlm=True
+        )
+
+        # 스레드 시작
+        self._inference_thread = threading.Thread(target=self._inference_worker, daemon=True)
+        self._inference_thread.start()
+
+    def _inference_worker(self):
+        """백그라운드: YOLO+LangGraph 추론 전담 스레드"""
+        state: AgentState = {
+            "frame": None,
+            "fall_detected": False,
+            "pose_data": {},
+            "no_movement_seconds": 0.0,
+            "track_id": None,
+            "annotated_frame": None,
+            "scene_description": "",
+            "estimated_age": "unknown",
+            "location_type": "other",
+            "hazards_detected": [],
+            "severity": "LOW",
+            "severity_score": 0,
+            "recommended_actions": [],
+            "auto_action_required": False,
+            "actions_taken": [],
+            "incident_id": None,
+            "snapshot_path": None,
+        }
+
+        while not self.stopped:
+            try:
+                frame = self.inference_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+
+            state["frame"] = frame
+            try:
+                result = self.graph.invoke(state)
+                state = result
+            except Exception as e:
+                print(f"[InferenceWorker] 추론 오류: {e}")
+                continue
+
+            annotated = result.get("annotated_frame")
+            if annotated is None:
+                annotated = frame.copy()
+
+            # 낙상 감지 시 알럿 상태 업데이트
+            if result.get("fall_detected"):
+                self.alert_frames_remaining = 60
+                self.last_severity = result.get("severity", "LOW")
+                self.last_score = result.get("severity_score", 0)
+                print(f"🚨 [Stream] 낙상 감지! 심각도={self.last_severity}, 점수={self.last_score}")
+
+            # 알럿 오버레이 그리기
+            if self.alert_frames_remaining > 0:
+                color = {"LOW": (0, 255, 0), "MEDIUM": (0, 165, 255), "HIGH": (0, 0, 255)}.get(self.last_severity, (0, 255, 0))
+                w, h = self.WIDTH, self.HEIGHT
+                cv2.rectangle(annotated, (10, 10), (310, 80), (0, 0, 0), -1)
+                cv2.rectangle(annotated, (10, 10), (310, 80), color, 2)
+                cv2.putText(annotated, f"FALL: {self.last_severity} ({self.last_score}/100)",
+                            (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                if self.last_severity in ["HIGH", "MEDIUM"]:
+                    cv2.putText(annotated, "FALL DETECTED!",
+                                (w // 2 - 120, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 3)
+                if self.last_severity == "HIGH":
+                    cv2.rectangle(annotated, (0, 0), (w, h), (0, 0, 255), 8)
+                self.alert_frames_remaining -= 1
+
+            # JPEG 인코딩 후 공유 변수에 저장 (Quality 40으로 낮춰 전송 속도 향상)
+            _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 40])
+            with self.latest_lock:
+                self.latest_annotated = buf.tobytes()
+
+    async def generate(self):
+        """MJPEG 스트림 생성기: 비디오 원본 속도로 프레임 전송"""
+        cap = cv2.VideoCapture(self.video_source)
+        if not cap.isOpened():
+            print(f"[Stream] 비디오 열기 실패: {self.video_source}")
+            return
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or self.TARGET_FPS
+        frame_delay = 1.0 / fps
+        frame_count = 0
+
+        try:
+            while not self.stopped:
+                ret, frame = cap.read()
+                if not ret:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    continue
+
+                frame_count += 1
+                frame = cv2.resize(frame, (self.WIDTH, self.HEIGHT))
+
+                # FRAME_SKIP마다 추론 큐에 제출 (큐가 가득 차면 드롭 → 블로킹 없음)
+                if frame_count % self.FRAME_SKIP == 0:
+                    try:
+                        self.inference_queue.put_nowait(frame.copy())
+                    except queue.Full:
+                        pass  # 이전 추론이 아직 처리 중 → 이 프레임은 드롭
+
+                # 최신 annotated 프레임이 있으면 전송, 없으면 원본 전송
+                with self.latest_lock:
+                    frame_bytes = self.latest_annotated
+
+                if frame_bytes is None:
+                    # 추론 결과 아직 없음 → 원본 프레임 그냥 전송 (Quality 40)
+                    _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
+                    frame_bytes = buf.tobytes()
+
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+                await asyncio.sleep(frame_delay)
+
+        finally:
+            cap.release()
+
+    def stop(self):
+        self.stopped = True
+
+
+@app.get("/video_feed")
+async def video_feed(video_path: str = "input/02872_H_C_FY_C4.mp4"):
+    """Returns the continuous MJPEG video stream"""
+    from fastapi.responses import StreamingResponse
+    source = os.path.join(base_dir, video_path)
+    stream = VideoStream(source)
+    return StreamingResponse(stream.generate(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+async def _raw_frame_generator(video_source: str, speed: float = 1.0):
+    """YOLO 추론 없이 원본 비디오를 원래 속도로 스트리밍 (GIF 캡쳐용 데모)"""
     cap = cv2.VideoCapture(video_source)
     if not cap.isOpened():
-        print(f"Failed to open video source: {video_source}")
         return
 
-    width, height = 980, 740
-    frame_count = 0
-    alert_frames_remaining = 0
-    last_severity = "LOW"
-    last_score = 0
-    last_dispatch_msg = ""
-    
-    # State persists across frames for tracking history
-    current_state: AgentState = {
-        "frame": None,
-        "fall_detected": False,
-        "pose_data": {},
-        "no_movement_seconds": 0.0,
-        "track_id": None,
-        "annotated_frame": None,
-        "scene_description": "",
-        "estimated_age": "unknown",
-        "location_type": "other",
-        "hazards_detected": [],
-        "severity": "LOW",
-        "severity_score": 0,
-        "recommended_actions": [],
-        "auto_action_required": False,
-        "actions_taken": [],
-        "incident_id": None,
-        "snapshot_path": None,
-    }
+    fps = cap.get(cv2.CAP_PROP_FPS) or 20.0
+    frame_delay = 1.0 / (fps * speed)
+    W, H = 640, 480
 
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
-                # Loop video for continuous testing
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
 
-            frame_count += 1
+            frame = cv2.resize(frame, (W, H))
 
-            frame = cv2.resize(frame, (width, height))
-            current_state["frame"] = frame.copy()
+            # 좌상단 데모 워터마크
+            cv2.rectangle(frame, (8, 8), (220, 32), (0, 0, 0), -1)
+            cv2.putText(frame, "AGENTIC FALL DETECTION", (14, 26),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 180), 1)
 
-            # 그래프 실행 (동기 함수이므로 ThreadPoolExecutor를 사용해 비동기 I/O를 막지 않게 분리)
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, local_graph.invoke, current_state)
-            
-            # Update persisted state with result from LangGraph
-            current_state = result
-
-            # 결과 프레임 꾸미기
-            annotated = result.get("annotated_frame")
-            if annotated is None:
-                annotated = frame.copy()
-
-            if result.get("fall_detected"):
-                alert_frames_remaining = 60  # Hold alert for ~3 seconds
-                last_severity = result.get("severity", "LOW")
-                last_score = result.get("severity_score", 0)
-                
-                for action in result.get("actions_taken", []):
-                    if action.get("tool") == "notify_security_room":
-                        last_dispatch_msg = action.get("result", {}).get("message", "")
-
-            if alert_frames_remaining > 0:
-                color = {"LOW": (0, 255, 0), "MEDIUM": (0, 165, 255), "HIGH": (0, 0, 255)}.get(last_severity, (0, 255, 0))
-                
-                # 좌측 상단 정보 박스
-                cv2.rectangle(annotated, (10, 10), (300, 120), (0, 0, 0), -1)
-                cv2.rectangle(annotated, (10, 10), (300, 120), color, 2)
-                cv2.putText(annotated, f"SEVERITY: {last_severity}", (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-                cv2.putText(annotated, f"Score: {last_score}/100", (20, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-                
-                # 중앙 대형 경고 문구 (붉은색/노란색)
-                if last_severity in ["HIGH", "MEDIUM"]:
-                    cv2.putText(annotated, f"[{last_severity}] FALL DETECTED!", (width//2 - 250, height//2), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 4)
-                    if last_dispatch_msg:
-                        cv2.putText(annotated, last_dispatch_msg, (width//2 - 350, height//2 + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-
-                # 화면 가장자리 붉은 테두리
-                if last_severity == "HIGH":
-                    cv2.rectangle(annotated, (0, 0), (width, height), (0, 0, 255), 10)
-
-                alert_frames_remaining -= 1
-
-            # Encode as JPEG
-            _, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            frame_bytes = buffer.tobytes()
-
-            # Yield frame for multipart response
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            
-            # small delay to prevent cpu overload for non-realtime streams
-            await asyncio.sleep(0.01)
-
+            _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            await asyncio.sleep(frame_delay)
     finally:
         cap.release()
 
-@app.get("/video_feed")
-async def video_feed(video_path: str = "input/02400_H_A_BY_C1.mp4"):
-    """Returns the continuous MJPEG video stream"""
+
+@app.get("/raw_feed")
+async def raw_feed(video_path: str = "input/02872_H_C_FY_C4.mp4", speed: float = 1.0):
+    """
+    YOLO 없이 원본 비디오를 원래 속도로 스트리밍.
+    GIF 캡쳐용 데모에 사용. speed=2.0 이면 2배속.
+    """
     from fastapi.responses import StreamingResponse
     source = os.path.join(base_dir, video_path)
-    return StreamingResponse(generate_frames(source), media_type="multipart/x-mixed-replace; boundary=frame")
+    return StreamingResponse(
+        _raw_frame_generator(source, speed),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+@app.post("/seed_demo_data")
+def seed_demo_data():
+    """
+    GIF 데모용: DB에 샘플 낙상 이벤트 데이터를 넣어서
+    Incident Registry / 통계 카드가 채워진 상태를 연출합니다.
+    """
+    from agentic.tools.db import init_db
+    import uuid
+    from datetime import datetime, timedelta
+
+    init_db(db_path)
+    conn = get_db_connection()
+
+    samples = [
+        ("HIGH",   92, "Elder person fell near staircase. No movement for 8s."),
+        ("HIGH",   87, "Individual collapsed in corridor. Possible head injury."),
+        ("MEDIUM", 65, "Person slipped in bathroom. Sitting on floor."),
+        ("MEDIUM", 58, "Subject fell near entrance. Got up after 3s."),
+        ("LOW",    32, "Person crouched quickly. Recovered immediately."),
+        ("HIGH",   95, "Fall detected in living room. No response for 12s."),
+    ]
+
+    now = datetime.now()
+    for i, (sev, score, desc) in enumerate(samples):
+        ts = now - timedelta(minutes=i * 7 + 2)
+        inc_id = f"INC-{ts.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        try:
+            conn.execute(
+                "INSERT INTO incidents (incident_id, timestamp, severity, severity_score, scene_description, actions_taken) VALUES (?,?,?,?,?,?)",
+                (inc_id, ts.isoformat(), sev, score, desc, '["log_to_db","save_snapshot","notify_security_room"]')
+            )
+        except Exception:
+            pass  # 중복 무시
+
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "inserted": len(samples)}
+
