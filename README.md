@@ -261,8 +261,18 @@ Agentic-fall-detection-system/
 
 ---
 
+## ✨ 향후 발전 가능성 (Future Work)
+
+### 다중 센서 결합 (Multi-Modal Sensor Integration)
+- **현재의 한계:** 비전(카메라) 데이터에만 의존하고 있어, 사각지대에서 넘어지거나 무언가에 가려진 경우 객체 인식이 어렵습니다.
+- **발전 계획:** LangGraph 아키텍처의 뛰어난 확장성(노드 추가의 용이성)을 살려, **`AudioNode`(마이크로폰 비명 및 충돌음 감지)** 와 **`WearableNode`(스마트워치 자이로스코프 이상 수치 연동)** 를 파이프라인에 추가할 계획입니다. 영상, 소리, 생체 신호라는 3가지 멀티모달(Multi-Modal) 데이터를 교차 검증(Cross-validation)하여 사각지대에서도 오탐지율 0%에 가까운 견고한 에이전트를 구축할 수 있습니다.
+
+---
+
+
 <div align="center">
 
 **Made for safety monitoring 👀**
 
 </div>
+
