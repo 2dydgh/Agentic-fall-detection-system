@@ -4,6 +4,7 @@ import argparse
 from dotenv import load_dotenv
 from agentic.graph import create_fall_detection_graph
 from agentic.state import AgentState
+from agentic.audio.extractor import AudioExtractor
 
 load_dotenv()
 
@@ -13,6 +14,7 @@ def main():
     parser.add_argument("--output", default="output/result_agentic.mp4", help="Output video path")
     parser.add_argument("--model", default="models/yolov26n-pose.pt", help="YOLO model path")
     parser.add_argument("--skip-vlm", action="store_true", help="Skip VLM analysis for faster processing")
+    parser.add_argument("--skip-audio", action="store_true", help="Skip audio analysis")
     args = parser.parse_args()
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -37,7 +39,8 @@ def main():
         email_sender=os.getenv("EMAIL_SENDER"),
         email_password=os.getenv("EMAIL_PASSWORD"),
         email_receiver=os.getenv("EMAIL_RECEIVER"),
-        skip_vlm=args.skip_vlm
+        skip_vlm=args.skip_vlm,
+        skip_audio=args.skip_audio,
     )
 
     # 비디오 처리
@@ -48,6 +51,14 @@ def main():
 
     width, height = 980, 740
     fps = cap.get(cv2.CAP_PROP_FPS) or 20.0
+
+    # 오디오 추출
+    if not args.skip_audio:
+        audio_extractor = AudioExtractor.from_video_file(video_path, video_fps=fps)
+        print(f"   - 오디오: {audio_extractor.duration_seconds:.1f}초 추출됨")
+    else:
+        audio_extractor = AudioExtractor.silent(video_fps=fps)
+        print(f"   - 오디오: OFF")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
@@ -75,6 +86,12 @@ def main():
         "actions_taken": [],
         "incident_id": None,
         "snapshot_path": None,
+        # Audio
+        "audio_chunk": None,
+        "audio_scream_detected": False,
+        "audio_impact_detected": False,
+        "audio_confidence": 0.0,
+        "audio_detected_labels": [],
     }
 
     alert_frames_remaining = 0
@@ -90,6 +107,7 @@ def main():
         frame_count += 1
         frame = cv2.resize(frame, (width, height))
         current_state["frame"] = frame.copy()
+        current_state["audio_chunk"] = audio_extractor.get_chunk_for_frame(frame_count)
 
         # 그래프 실행
         result = graph.invoke(current_state)

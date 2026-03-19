@@ -14,6 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agentic.graph import create_fall_detection_graph
 from agentic.state import AgentState
+from agentic.audio.extractor import AudioExtractor
 
 load_dotenv()
 
@@ -115,8 +116,12 @@ class VideoStream:
             email_sender=os.getenv("EMAIL_SENDER"),
             email_password=os.getenv("EMAIL_PASSWORD"),
             email_receiver=os.getenv("EMAIL_RECEIVER"),
-            skip_vlm=True
+            skip_vlm=True,
+            skip_audio=False,
         )
+
+        # 오디오 추출
+        self.audio_extractor = AudioExtractor.from_video_file(video_source, video_fps=self.TARGET_FPS)
 
         # 스레드 시작
         self._inference_thread = threading.Thread(target=self._inference_worker, daemon=True)
@@ -142,15 +147,24 @@ class VideoStream:
             "actions_taken": [],
             "incident_id": None,
             "snapshot_path": None,
+            # Audio
+            "audio_chunk": None,
+            "audio_scream_detected": False,
+            "audio_impact_detected": False,
+            "audio_confidence": 0.0,
+            "audio_detected_labels": [],
         }
 
+        inference_frame_count = 0
         while not self.stopped:
             try:
                 frame = self.inference_queue.get(timeout=1.0)
             except queue.Empty:
                 continue
 
+            inference_frame_count += 1
             state["frame"] = frame
+            state["audio_chunk"] = self.audio_extractor.get_chunk_for_frame(inference_frame_count)
             try:
                 result = self.graph.invoke(state)
                 state = result
