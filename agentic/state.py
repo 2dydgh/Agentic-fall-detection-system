@@ -15,6 +15,13 @@ class AgentState(TypedDict):
     location_type: Literal["stairs", "bathroom", "hallway", "outdoor", "other"]
     hazards_detected: list[str]
 
+    # Audio Node
+    audio_chunk: Optional[Any]  # 현재 프레임에 대응하는 오디오 청크 (numpy 배열 또는 None)
+    audio_scream_detected: bool
+    audio_impact_detected: bool
+    audio_confidence: float
+    audio_detected_labels: list[str]
+
     # Decision Node
     severity: Literal["LOW", "MEDIUM", "HIGH"]
     severity_score: int

@@ -34,7 +34,13 @@ def decision_node(state: dict) -> dict:
     location_bonus = 10 if location in ["stairs", "bathroom"] else 0
     hazard_bonus = 10 if len(hazards) > 0 else 0
 
-    total_score = int(base_score + age_bonus + location_bonus + hazard_bonus)
+    # 오디오 보너스 (Late Fusion)
+    scream = state.get("audio_scream_detected", False)
+    impact = state.get("audio_impact_detected", False)
+    scream_bonus = 15 if scream else 0
+    impact_bonus = 10 if impact else 0
+
+    total_score = int(base_score + age_bonus + location_bonus + hazard_bonus + scream_bonus + impact_bonus)
     total_score = max(0, min(total_score, 100))
 
     # 심각도 판정 (완화된 기준)
