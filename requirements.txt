@@ -7,6 +7,12 @@ Pillow               # 이미지 처리 (PIL)
 opencv-python        # 영상 처리 (cv2)
 cvzone               # OpenCV 유틸리티
 
+# ── Audio (Multimodal Late Fusion) ─────────────────────────────────
+tensorflow           # YAMNet 모델 런타임
+tensorflow-hub       # YAMNet 모델 로드
+librosa              # 오디오 파일 로드 / 리샘플링
+scipy                # 오디오 신호 처리
+
 # ── Agentic Framework ───────────────────────────────────────────────
 langgraph            # LangGraph 에이전트 워크플로우
 langchain-core       # LangGraph 의존성
