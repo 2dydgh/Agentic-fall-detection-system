@@ -22,12 +22,15 @@ def create_fall_detection_graph(
     email_sender: str = None,
     email_password: str = None,
     email_receiver: str = None,
-    skip_vlm: bool = False
+    skip_vlm: bool = False,
+    skip_audio: bool = False,
 ):
-    """LangGraph 워크플로우 생성"""
+    """LangGraph 워크플로우 생성 (비전 + 오디오 멀티모달)"""
 
     # 노드 초기화
     perception = PerceptionNode(model_path)
+    from .nodes.audio import AudioNode
+    audio = AudioNode(skip_model=skip_audio)
     action = ActionNode(
         db_path=db_path, 
         slack_webhook=slack_webhook,
@@ -45,6 +48,10 @@ def create_fall_detection_graph(
         if frame is None:
             return state
         result = perception.process(frame, state)
+        return {**state, **result}
+
+    def audio_node_func(state: AgentState) -> AgentState:
+        result = audio.process(state)
         return {**state, **result}
 
     def analysis_node(state: AgentState) -> AgentState:
@@ -75,13 +82,15 @@ def create_fall_detection_graph(
 
     # 노드 추가
     graph.add_node("perception", perception_node)
+    graph.add_node("audio", audio_node_func)
     graph.add_node("analysis", analysis_node)
     graph.add_node("decision", decision_node_wrapper)
     graph.add_node("action", action_node_func)
 
-    # 엣지 연결
+    # 엣지 연결: perception → audio → analysis → decision → action
     graph.set_entry_point("perception")
-    graph.add_edge("perception", "analysis")
+    graph.add_edge("perception", "audio")
+    graph.add_edge("audio", "analysis")
     graph.add_edge("analysis", "decision")
     graph.add_edge("decision", "action")
     graph.add_edge("action", END)
