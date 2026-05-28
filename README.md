@@ -33,33 +33,40 @@
 ## 🏗️ 시스템 아키텍처
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     LangGraph Agentic Pipeline                  │
-│                                                                 │
-│   📹 CCTV Feed                                                  │
-│       │                                                         │
-│       ▼                                                         │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
-│  │ Perception  │───▶│  Analysis   │───▶│  Decision   │         │
-│  │    Node     │    │    Node     │    │    Node     │         │
-│  │ (YOLO11n   │    │ (Florence-2 │    │ (Severity   │         │
-│  │   Pose)    │    │    VLM)     │    │  Scoring)   │         │
-│  └─────────────┘    └─────────────┘    └──────┬──────┘         │
-│                                               │                 │
-│                                               ▼                 │
-│                                        ┌─────────────┐         │
-│                                        │   Action    │         │
-│                                        │    Node     │         │
-│                                        │ Email/Slack │         │
-│                                        │ /DB Logging │         │
-│                                        └─────────────┘         │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│              LangGraph Pipeline — 2-Track Architecture               │
+│                                                                      │
+│   📹 CCTV Feed        🎤 Audio                                       │
+│       │                  │                                           │
+│       ▼                  ▼                                           │
+│  ┌───────────┐    ┌───────────┐    ┌───────────┐    ┌───────────┐   │
+│  │Perception │───▶│  Audio    │───▶│ Analysis  │───▶│ Decision  │   │
+│  │   Node    │    │   Node    │    │   Node    │    │   Node    │   │
+│  │(YOLO11n  │    │ (YAMNet)  │    │(Florence-2│    │(Rule-based│   │
+│  │  Pose)   │    │비명/충격음│    │   VLM)    │    │   ~1ms)   │   │
+│  └───────────┘    └───────────┘    └───────────┘    └─────┬─────┘   │
+│                                                           │          │
+│                          [실시간 경로 — 즉시 대응]         ▼          │
+│                                                    ┌───────────┐    │
+│                                                    │  Action   │    │
+│                                                    │   Node    │    │
+│                                                    │  즉시 알림 │    │
+│                                                    └───────────┘    │
+│                                                           │          │
+│                          [비동기 경로 — 후속 판단]         ▼          │
+│                                                    ┌───────────┐    │
+│                                                    │ LLM Agent │    │
+│                                                    │  (Ollama) │    │
+│                                                    │ 정밀 분석  │    │
+│                                                    │ 에스컬레이션│    │
+│                                                    └───────────┘    │
+└──────────────────────────────────────────────────────────────────────┘
          │                                        │
          ▼                                        ▼
   ┌─────────────┐                        ┌─────────────┐
   │  FastAPI    │ ◀────── REST API ─────▶│  Next.js   │
   │  Backend   │   MJPEG Stream + SSE   │  Dashboard  │
-  │  (8000)   │                        │   (3000)   │
+  │  (8000)    │                        │   (3000)    │
   └─────────────┘                        └─────────────┘
 ```
 
@@ -72,14 +79,69 @@
 | 항목 | 내용 |
 |------|------|
 | **기존 방식의 한계** | `if fallen → alert()` 형태의 정적 룰 기반 로직 |
-| **해결 방법** | LangGraph로 `PerceptionNode → VLMNode → DecisionNode → ActionNode` 파이프라인 구현 |
-| **핵심 효과** | 장소 특성(병동/계단/거실)과 위험 요소에 따라 동적으로 **심각도(Severity) 점수** 산출 |
+| **해결 방법** | LangGraph로 `PerceptionNode → AudioNode → AnalysisNode → DecisionNode → ActionNode` 파이프라인 구현 |
+| **핵심 효과** | 비전 + 오디오 멀티모달 Late Fusion, 장소/위험 요소에 따라 동적으로 **심각도(Severity) 점수** 산출 |
 
 > 🎯 **결과:** 가짜 알람(False Positive) 대폭 감소 + 실제 위급 상황 감지 정확도 획기적 향상
 
 ---
 
-### 2. 🎥 다중 카메라 동시 스트리밍 — FastAPI Async 아키텍처
+### 2. 🔊 오디오 멀티모달 Late Fusion — YAMNet 비명/충격음 감지
+
+```
+비디오 프레임               오디오 청크 (0.975초)
+    │                           │
+    ▼                           ▼
+ YOLO11n-pose               YAMNet (521클래스)
+ (각도/속도)                (비명/충격음)
+    │                           │
+    └───────────┬───────────────┘
+                ▼
+         DecisionNode (Late Fusion)
+         비명: +15점 / 충격음: +10점
+```
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | 비전만으로는 사각지대·가려진 낙상을 놓침 |
+| **해결** | YAMNet(TF Hub)으로 프레임 동기화된 오디오 분석, DecisionNode에서 Late Fusion |
+| **효과** | 비명·충격음이 동반된 낙상에서 심각도 점수 상승 → 실제 위험 상황 감지 강화 |
+
+> 🎯 **결과:** 영상(눈) + 소리(귀) 멀티모달 교차 검증으로 오탐지율 감소 및 위급 상황 감지율 향상
+
+---
+
+### 3. 🧠 LLM Agent Mode — Ollama 기반 지능형 판단 (on/off 전환)
+
+| 항목 | 내용 |
+|------|------|
+| **기존 방식** | 룰 기반 점수 계산 (`if score > 75 → HIGH`) — 빠르지만 맥락 이해 불가 |
+| **Agent Mode** | Ollama 로컬 LLM이 센서 데이터를 종합 판단 — "계단 + 고령자 + 비명 → 119 필요" |
+| **설계 철학** | 실시간 관제에서는 룰 기반(빠름), 정밀 분석 시 LLM(똑똑함)으로 on/off 전환 |
+
+```bash
+# 룰 기반 (기본, ~1ms)
+python main_agentic.py --video input/sample.mp4
+
+# LLM Agent 모드 (Ollama 필요, ~1-3초)
+python main_agentic.py --video input/sample.mp4 --agent-mode
+
+# API 런타임 토글
+curl -X POST http://localhost:8000/api/agent_toggle
+```
+
+| | 룰 기반 (OFF) | LLM Agent (ON) |
+|--|--------------|----------------|
+| 속도 | ~1ms | ~1-3초 |
+| 판단력 | 고정 점수 계산 | 맥락 기반 종합 판단 |
+| 비용 | 없음 | 없음 (로컬 Ollama) |
+| LLM 실패 시 | — | 자동 룰 기반 폴백 |
+
+> 🎯 **설계 근거:** 낙상 감지는 골든타임이 생명이므로 **실시간 경로는 룰 기반(~1ms)으로 즉시 대응**하고, LLM은 비동기 후속 판단 또는 사후 정밀 분석 용도로 설계. "Agentic하게 만들 수 있느냐"와 "만들어야 하느냐"는 다른 문제 — **의도적으로 속도를 우선한 엔지니어링 판단**
+
+---
+
+### 4. 🎥 다중 카메라 동시 스트리밍 — FastAPI Async 아키텍처
 
 ```python
 # YOLO 추론이 asyncio 이벤트 루프를 블로킹하지 않도록 처리
@@ -95,7 +157,7 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 
 ---
 
-### 3. 🤔 포즈 추정 휴리스틱 튜닝 — False Positive 제거
+### 5. 🤔 포즈 추정 휴리스틱 튜닝 — False Positive 제거
 
 <details>
 <summary><b>📐 낙상 판정 알고리즘 상세 (클릭하여 펼치기)</b></summary>
@@ -117,7 +179,7 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 
 ---
 
-### 4. 🖥️ 관제실 특화 대시보드 — Next.js + TailwindCSS
+### 6. 🖥️ 관제실 특화 대시보드 — Next.js + TailwindCSS
 
 **주요 UI 기능:**
 - 🔴 낙상 감지 즉시 **화면 전체 붉은색 맥박(Pulse) 점멸**
@@ -127,7 +189,7 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 
 ---
 
-### 5. 📧 실시간 자동 긴급 이메일 발송 — 오프라인 2중 안전장치
+### 7. 📧 실시간 자동 긴급 이메일 발송 — 오프라인 2중 안전장치
 
 ```
 낙상 감지 (HIGH Severity)
@@ -171,7 +233,7 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 
 | 분류 | 기술 |
 |------|------|
-| **AI / Agent** | LangGraph, YOLO11n-pose (Ultralytics), Florence-2 (Microsoft) |
+| **AI / Agent** | LangGraph, YOLO11n-pose (Ultralytics), Florence-2 (Microsoft), YAMNet (Google), Ollama (LLM Agent) |
 | **Backend** | Python 3.10+, FastAPI, Uvicorn, SQLite |
 | **Frontend** | Next.js (React), TailwindCSS, Lucide Icons |
 | **알림** | Gmail SMTP, Slack Webhook (선택) |
@@ -195,9 +257,9 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 
 ### 사전 준비 (Prerequisites)
 
-
 - Python **3.10** 이상
 - Node.js & npm
+- [Ollama](https://ollama.com/) (LLM Agent Mode 사용 시, 선택사항)
 
 ### ① AI 모델 다운로드
 
@@ -207,6 +269,16 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 mkdir -p models
 wget -O models/yolov26n-pose.pt \
   https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n-pose.pt
+```
+
+### ①-1 Ollama 설정 (Agent Mode 사용 시, 선택)
+
+```bash
+# Ollama 설치
+curl -fsSL https://ollama.com/install.sh | sh
+
+# LLM 모델 다운로드 (llama3.2, ~2GB)
+ollama pull llama3.2
 ```
 
 ### ② 백엔드 실행
@@ -244,12 +316,17 @@ npm run dev
 Agentic-fall-detection-system/
 ├── agentic/                  # LangGraph 에이전트 핵심 로직
 │   ├── graph.py              # 워크플로우 그래프 정의
-│   ├── state.py              # 에이전트 상태 스키마
+│   ├── state.py              # 에이전트 상태 스키마 (AgentState)
 │   ├── nodes/
 │   │   ├── perception.py     # YOLO11n 포즈 추정 노드
+│   │   ├── audio.py          # YAMNet 오디오 분류 노드
 │   │   ├── analysis.py       # Florence-2 VLM 분석 노드
-│   │   ├── decision.py       # 심각도 판단 노드
+│   │   ├── decision.py       # 룰 기반 심각도 판단
+│   │   ├── decision_llm.py   # LLM Agent 심각도 판단 (Ollama)
 │   │   └── action.py         # 이메일/DB/Slack 액션 노드
+│   ├── audio/
+│   │   ├── extractor.py      # 프레임 동기화 오디오 청크 추출
+│   │   └── labels.py         # YAMNet 521클래스 → 비명/충격음 매핑
 │   └── tools/                # 보조 도구 모음
 ├── api/
 │   └── main.py               # FastAPI 라우터 & MJPEG 스트리밍
@@ -261,11 +338,41 @@ Agentic-fall-detection-system/
 
 ---
 
+## 🏛️ 설계 철학 — 왜 고정 파이프라인인가?
+
+이 시스템은 의도적으로 고정 파이프라인을 선택했습니다.
+
+| 질문 | 답변 |
+|------|------|
+| **왜 Agent로 안 만들었나?** | 낙상은 골든타임 싸움. LLM 루프(1~3초)가 도는 동안 고령자가 2차 부상을 입을 수 있음 |
+| **LangGraph를 왜 쓰나?** | 노드 간 상태 공유, 멀티모달 확장성, 향후 동적 그래프 전환 가능성 |
+| **LLM은 왜 넣었나?** | 실시간 대응은 룰 기반으로 하되, 비동기 후속 판단에서 LLM의 맥락 이해력 활용 |
+
+```
+[실시간 경로] — 최우선, ~1ms                    [비동기 경로] — 백그라운드
+Perception → Audio → Decision(룰) → Action       └→ LLM 정밀 판단
+         (즉시 알림)                              └→ 과거 이력 대조
+                                                  └→ 오탐/미탐 분석
+                                                  └→ 필요 시 추가 대응 (에스컬레이션)
+```
+
+> 💡 **"Agentic하게 만들 수 있다"와 "만들어야 한다"는 다른 문제.** 도메인의 제약 조건(실시간성)에 맞는 설계가 좋은 설계이며, Agentic한 판단은 속도가 허용되는 비동기 경로에서 활용합니다.
+
+---
+
 ## ✨ 향후 발전 가능성 (Future Work)
 
-### 다중 센서 결합 (Multi-Modal Sensor Integration)
-- **현재의 한계:** 비전(카메라) 데이터에만 의존하고 있어, 사각지대에서 넘어지거나 무언가에 가려진 경우 객체 인식이 어렵습니다.
-- **발전 계획:** LangGraph 아키텍처의 뛰어난 확장성(노드 추가의 용이성)을 살려, **`AudioNode`(마이크로폰 비명 및 충돌음 감지)** 와 **`WearableNode`(스마트워치 자이로스코프 이상 수치 연동)** 를 파이프라인에 추가할 계획입니다. 영상, 소리, 생체 신호라는 3가지 멀티모달(Multi-Modal) 데이터를 교차 검증(Cross-validation)하여 사각지대에서도 오탐지율 0%에 가까운 견고한 에이전트를 구축할 수 있습니다.
+### 비동기 Agent 경로 구현 (2-Track Architecture)
+- **현재 상태:** 실시간 경로(룰 기반 고정 파이프라인) + LLM 판단 토글(on/off)
+- **발전 계획:** 낙상 감지 시 실시간 경로는 즉시 알림을 보내면서, **동시에 비동기 경로에서 LLM Agent가 후속 판단** 수행 — Florence-2 정밀 분석, 과거 인시던트 이력 대조, 오탐 여부 검증, 필요 시 119 신고 에스컬레이션. 이 비동기 경로가 **Tool Calling + 루프 + 동적 분기를 갖춘 진짜 AI Agent**
+
+### Persistent Memory 도입
+- **현재 상태:** 인시던트가 DB에 기록되지만 판단에 활용되지 않음
+- **발전 계획:** 과거 낙상 이력을 바탕으로 구역별 오탐/미탐 패턴을 학습하여 판단 기준을 자동 조정. (예: "3층 복도는 오탐이 잦으니 임계치 상향", "7층 병실은 놓친 사례가 있으니 민감도 상향")
+
+### 웨어러블 센서 연동 (Wearable Sensor Integration)
+- **현재 상태:** 비전(YOLO11n) + 오디오(YAMNet) 멀티모달 Late Fusion 구현 완료
+- **발전 계획:** **`WearableNode`(스마트워치 자이로스코프 이상 수치 연동)** 를 파이프라인에 추가. 영상·소리·생체 신호 3종 멀티모달 교차 검증
 
 ---
 
