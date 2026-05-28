@@ -15,6 +15,9 @@ def init_db(db_path: str = "incidents.db"):
             severity_score INTEGER,
             scene_description TEXT,
             actions_taken TEXT,
+            audio_scream_detected INTEGER DEFAULT 0,
+            audio_impact_detected INTEGER DEFAULT 0,
+            audio_confidence REAL DEFAULT 0.0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -26,7 +29,10 @@ def log_to_db(
     severity: str,
     scene_description: str,
     severity_score: int,
-    actions_taken: list
+    actions_taken: list,
+    audio_scream_detected: bool = False,
+    audio_impact_detected: bool = False,
+    audio_confidence: float = 0.0,
 ) -> str:
     """이벤트를 DB에 저장하고 incident_id 반환"""
     now = datetime.now()
@@ -35,15 +41,18 @@ def log_to_db(
 
     conn = sqlite3.connect(db_path)
     conn.execute("""
-        INSERT INTO incidents (incident_id, timestamp, severity, severity_score, scene_description, actions_taken)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO incidents (incident_id, timestamp, severity, severity_score, scene_description, actions_taken, audio_scream_detected, audio_impact_detected, audio_confidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         incident_id,
         now.isoformat(),
         severity,
         severity_score,
         scene_description,
-        json.dumps(actions_taken)
+        json.dumps(actions_taken),
+        int(audio_scream_detected),
+        int(audio_impact_detected),
+        audio_confidence,
     ))
     conn.commit()
     conn.close()

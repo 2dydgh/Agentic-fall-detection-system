@@ -43,6 +43,23 @@ class AudioExtractor:
             return cls.silent(video_fps=video_fps)
 
     @classmethod
+    def from_wav_file(cls, wav_path: str, video_fps: float) -> "AudioExtractor":
+        """별도 WAV 파일에서 오디오 로드. 영상과 독립된 오디오 소스 사용 시."""
+        import scipy.io.wavfile as wavfile
+        sr, data = wavfile.read(wav_path)
+        # stereo → mono
+        if data.ndim == 2:
+            data = data.mean(axis=1)
+        # normalize to float32 [-1, 1]
+        if data.dtype == np.int16:
+            data = data.astype(np.float32) / 32768.0
+        elif data.dtype == np.int32:
+            data = data.astype(np.float32) / 2147483648.0
+        else:
+            data = data.astype(np.float32)
+        return cls.from_waveform(data, sample_rate=sr, video_fps=video_fps)
+
+    @classmethod
     def silent(cls, video_fps: float) -> "AudioExtractor":
         """오디오 없는 모드 — 모든 청크가 None"""
         return cls(waveform=None, sample_rate=YAMNET_SAMPLE_RATE, video_fps=video_fps)

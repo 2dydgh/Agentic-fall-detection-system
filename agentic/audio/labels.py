@@ -10,12 +10,16 @@ https://github.com/tensorflow/models/blob/master/research/audioset/yamnet/yamnet
 # https://github.com/tensorflow/models/blob/master/research/audioset/yamnet/yamnet_class_map.csv
 # 구현 시 실제 CSV를 다운로드하여 인덱스-라벨 매핑을 검증할 것.
 
-# 비명/도움 요청 관련
+# 비명/도움 요청/신음 관련
 SCREAM_LABELS = [
     (322, "Screaming"),
     (316, "Shout"),
     (317, "Yell"),
-    (2, "Crying, sobbing"),
+    (19, "Crying, sobbing"),
+    (21, "Whimper"),
+    (22, "Wail, moan"),
+    (33, "Groan"),
+    (39, "Gasp"),
 ]
 
 # 충격음/충돌음 관련
@@ -34,8 +38,8 @@ _SCREAM_INDICES = {idx for idx, _ in SCREAM_LABELS}
 _IMPACT_INDICES = {idx for idx, _ in IMPACT_LABELS}
 _ALL_RELEVANT_INDICES = _SCREAM_INDICES | _IMPACT_INDICES
 
-# 최소 신뢰도 임계값
-CONFIDENCE_THRESHOLD = 0.3
+# 최소 신뢰도 임계값 (신음/groaning 감지를 위해 0.15로 낮춤)
+CONFIDENCE_THRESHOLD = 0.15
 
 
 def classify_audio_event(scores) -> dict:
