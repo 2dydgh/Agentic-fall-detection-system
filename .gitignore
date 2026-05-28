@@ -50,3 +50,12 @@ node_modules/
 .next/
 out/
 build/
+
+# Data (datasets, audio samples)
+data/
+
+# Docs (plans, internal notes)
+docs/
+
+# Claude Code
+CLAUDE.md
