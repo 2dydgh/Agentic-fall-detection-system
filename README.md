@@ -327,6 +327,10 @@ Agentic-fall-detection-system/
 │   ├── audio/
 │   │   ├── extractor.py      # 프레임 동기화 오디오 청크 추출
 │   │   └── labels.py         # YAMNet 521클래스 → 비명/충격음 매핑
+│   ├── agent/
+│   │   ├── tools.py          # Agent 도구 정의 (4종)
+│   │   ├── escalation_agent.py # ReAct 루프 에스컬레이션 Agent
+│   │   └── runner.py         # 비동기(스레드) Agent 실행기
 │   └── tools/                # 보조 도구 모음
 ├── api/
 │   └── main.py               # FastAPI 라우터 & MJPEG 스트리밍
@@ -360,14 +364,37 @@ Perception → Audio → Decision(룰) → Action       └→ LLM 정밀 판단
 
 ---
 
+### 8. 🧠 비동기 에스컬레이션 Agent — ReAct 루프 기반 후속 판단
+
+```
+[실시간 경로 — 즉시 대응]                [비동기 경로 — 후속 판단]
+Perception → Decision → Action ──────▶ EscalationAgent (별도 스레드)
+         (~1ms, 룰 기반)                      │
+         즉시 알림 전송                        ├─ 1. 과거 이력 조회 (Tool Call)
+                                              ├─ 2. LLM 상황 분석 (Reasoning)
+                                              ├─ 3. 에스컬레이션 판단 (Tool Call)
+                                              └─ 4. 결과 DB 저장 (agent_results)
+```
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | 실시간 경로의 룰 기반 판단은 빠르지만 맥락 이해 불가 (반복 오탐, 패턴 분석 등) |
+| **해결** | ActionNode에서 낙상 감지 시 별도 스레드로 `EscalationAgent` 비동기 실행 — 실시간 경로 블로킹 없음 |
+| **Agent 도구** | `query_incident_history` (이력 조회), `reanalyze_with_vlm` (Florence-2 재분석), `escalate_emergency` (119 에스컬레이션), `update_severity` (심각도 수정) |
+| **안전장치** | max_iterations=4, timeout=30s 이중 제한 + LLM 실패 시 룰 기반 폴백 |
+
+> 이 비동기 경로가 **Tool Calling + ReAct 루프 + 자율 판단을 갖춘 진짜 AI Agent**. 실시간 경로는 속도, 비동기 경로는 지능 — 2-Track Architecture의 핵심.
+
+---
+
 ## ✨ 향후 발전 가능성 (Future Work)
 
-### 비동기 Agent 경로 구현 (2-Track Architecture)
-- **현재 상태:** 실시간 경로(룰 기반 고정 파이프라인) + LLM 판단 토글(on/off)
-- **발전 계획:** 낙상 감지 시 실시간 경로는 즉시 알림을 보내면서, **동시에 비동기 경로에서 LLM Agent가 후속 판단** 수행 — Florence-2 정밀 분석, 과거 인시던트 이력 대조, 오탐 여부 검증, 필요 시 119 신고 에스컬레이션. 이 비동기 경로가 **Tool Calling + 루프 + 동적 분기를 갖춘 진짜 AI Agent**
+### Multi-Agent 오케스트레이터 (Phase 2)
+- **현재 상태:** 단일 EscalationAgent가 이력 조회, 상황 분석, 에스컬레이션 판단을 모두 수행
+- **발전 계획:** 역할별로 HistoryAgent(패턴 분석), SituationAgent(VLM 재분석), DecisionAgent(최종 판단)로 분리. LangGraph `fan-out → fan-in`으로 병렬 실행 + 조건부 루프
 
 ### Persistent Memory 도입
-- **현재 상태:** 인시던트가 DB에 기록되지만 판단에 활용되지 않음
+- **현재 상태:** 인시던트와 Agent 결과가 DB에 기록되지만 판단에 자동 활용되지 않음
 - **발전 계획:** 과거 낙상 이력을 바탕으로 구역별 오탐/미탐 패턴을 학습하여 판단 기준을 자동 조정. (예: "3층 복도는 오탐이 잦으니 임계치 상향", "7층 병실은 놓친 사례가 있으니 민감도 상향")
 
 ### 웨어러블 센서 연동 (Wearable Sensor Integration)
