@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileText, ShieldAlert, Cpu, Activity, Clock, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { FileText, ShieldAlert, Cpu, Activity, Clock, AlertTriangle, CheckCircle2, Volume2, Zap } from "lucide-react";
 
 type Incident = {
   id: string;
   timestamp: string;
   severity: string;
   score: number;
+  audio_scream: boolean;
+  audio_impact: boolean;
+  audio_confidence: number;
 };
 
 type Stats = {
@@ -20,12 +23,13 @@ type Stats = {
 export default function Home() {
   const [stats, setStats] = useState<Stats>({ total: 0, high: 0, medium: 0, logs: [] });
   const [currentTime, setCurrentTime] = useState("");
+  const [audioEnabled, setAudioEnabled] = useState(true);
 
   // Fetch incidents periodically
   useEffect(() => {
     const fetchIncidents = async () => {
       try {
-        const res = await fetch("http://localhost:8000/api/incidents");
+        const res = await fetch("http://localhost:8002/api/incidents");
         const data = await res.json();
         if (data && Array.isArray(data.logs)) {
           setStats(data);
@@ -39,6 +43,28 @@ export default function Home() {
     const interval = setInterval(fetchIncidents, 2000);
     return () => clearInterval(interval);
   }, []);
+
+  // Fetch audio status
+  useEffect(() => {
+    const fetchAudioStatus = async () => {
+      try {
+        const res = await fetch("http://localhost:8002/api/audio_status");
+        const data = await res.json();
+        setAudioEnabled(data.enabled);
+      } catch {}
+    };
+    fetchAudioStatus();
+    const interval = setInterval(fetchAudioStatus, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const toggleAudio = async () => {
+    try {
+      const res = await fetch("http://localhost:8002/api/audio_toggle", { method: "POST" });
+      const data = await res.json();
+      setAudioEnabled(data.enabled);
+    } catch {}
+  };
 
   // Update real-time clock
   useEffect(() => {
@@ -124,10 +150,65 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Audio Detection Status */}
+            <div className="mt-4">
+              <div className="bg-neutral-800/50 border border-neutral-600/60 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="flex items-center gap-2">
+                    <Volume2 className="w-3.5 h-3.5 text-purple-400" />
+                    <p className="text-neutral-300 text-xs font-medium uppercase tracking-wider">Audio Analysis</p>
+                  </div>
+                  <button
+                    onClick={toggleAudio}
+                    className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${audioEnabled ? 'bg-purple-500' : 'bg-neutral-600'}`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform duration-200 ${audioEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+                {(() => {
+                  if (!audioEnabled) {
+                    return (
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-2 w-2 rounded-full bg-neutral-600" />
+                        <span className="text-neutral-500 text-xs">Disabled</span>
+                      </div>
+                    );
+                  }
+                  const recentWithAudio = stats.logs.filter(l => l.audio_scream || l.audio_impact);
+                  const latestAudio = recentWithAudio[0];
+                  if (latestAudio) {
+                    const isRecent = (new Date().getTime() - new Date(latestAudio.timestamp).getTime()) < 30000;
+                    return (
+                      <div className="space-y-1.5">
+                        {latestAudio.audio_scream && (
+                          <div className={`flex items-center gap-2 ${isRecent ? 'animate-pulse' : ''}`}>
+                            <span className="flex h-2 w-2 rounded-full bg-purple-500 shadow-[0_0_6px_rgba(168,85,247,0.8)]" />
+                            <span className="text-purple-400 text-xs font-semibold">Scream Detected</span>
+                          </div>
+                        )}
+                        {latestAudio.audio_impact && (
+                          <div className={`flex items-center gap-2 ${isRecent ? 'animate-pulse' : ''}`}>
+                            <span className="flex h-2 w-2 rounded-full bg-orange-500 shadow-[0_0_6px_rgba(249,115,22,0.8)]" />
+                            <span className="text-orange-400 text-xs font-semibold">Impact Sound</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-2 w-2 rounded-full bg-neutral-500" />
+                      <span className="text-neutral-400 text-xs">No audio events</span>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+
             <div className="mt-auto pt-6">
               <div className="flex items-center justify-between text-[0.65rem] text-neutral-300 border-t border-neutral-600/50 pt-3 font-medium">
                 <span className="flex items-center gap-1.5"><Cpu className="w-3 h-3" /> Core: FLORENCE-2</span>
-                <span>Pose Engine: YOLOv11</span>
+                <span>Audio: YAMNet</span>
               </div>
             </div>
           </div>
@@ -155,7 +236,7 @@ export default function Home() {
 
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="http://localhost:8000/video_feed?video_path=input/corridor.mp4"
+                src="http://localhost:8002/video_feed?video_path=input/02400_H_A_BY_C1.mp4&audio_path=data/fall_audio_sample.wav"
                 alt="Corridor Feed"
                 className="w-full h-full object-contain"
               />
@@ -185,7 +266,7 @@ export default function Home() {
 
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="http://localhost:8000/video_feed?video_path=input/hospital.mp4"
+                src="http://localhost:8002/video_feed?video_path=input/02342_H_A_BY_C5.mp4&audio_path=data/fall_audio_sample.wav"
                 alt="Hospital Feed"
                 className="w-full h-full object-contain"
               />
@@ -215,7 +296,7 @@ export default function Home() {
 
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="http://localhost:8000/video_feed?video_path=input/street.mp4"
+                src="http://localhost:8002/video_feed?video_path=input/01491_O_F_BY_C8.mp4&audio_path=data/fall_audio_sample.wav"
                 alt="Street Feed"
                 className="w-full h-full object-contain"
               />
@@ -238,7 +319,7 @@ export default function Home() {
                 <div key={index} className="mb-1.5 flex gap-3 items-start p-1.5 hover:bg-neutral-600/30 rounded-md transition-colors">
                   <span className="text-neutral-300 shrink-0">[{log.timestamp.split('T')[1] || log.timestamp.split(' ')[1] || log.timestamp}]</span>
                   <span className={`break-words ${log.severity === "HIGH" ? "text-red-400 font-medium" : log.severity === "MEDIUM" ? "text-amber-400 font-medium" : "text-neutral-100"}`}>
-                    System Alert: Processed Event {log.id}. Status level evaluated to {log.severity} with AI Confidence {log.score}
+                    System Alert: Processed Event {log.id}. Status level evaluated to {log.severity} with AI Confidence {log.score}{log.audio_scream ? ' [SCREAM]' : ''}{log.audio_impact ? ' [IMPACT]' : ''}
                   </span>
                 </div>
               ))}
@@ -290,6 +371,21 @@ export default function Home() {
                       <span className="text-neutral-200 text-[0.65rem] font-mono bg-neutral-800/50 px-2 py-1 rounded inline-block w-fit border border-neutral-600/80">
                         {incident.id.substring(4, 20)}...
                       </span>
+
+                      {(incident.audio_scream || incident.audio_impact) && (
+                        <div className="flex gap-1.5">
+                          {incident.audio_scream && (
+                            <span className="flex items-center gap-1 px-2 py-0.5 bg-purple-500/15 border border-purple-500/30 rounded-full text-[0.6rem] font-semibold text-purple-400">
+                              <Volume2 className="w-3 h-3" /> Scream
+                            </span>
+                          )}
+                          {incident.audio_impact && (
+                            <span className="flex items-center gap-1 px-2 py-0.5 bg-orange-500/15 border border-orange-500/30 rounded-full text-[0.6rem] font-semibold text-orange-400">
+                              <Zap className="w-3 h-3" /> Impact
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       <div>
                         <div className="flex justify-between items-center mb-1.5">
