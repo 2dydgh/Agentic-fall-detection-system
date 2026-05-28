@@ -22,6 +22,9 @@ fastapi              # REST API 서버
 uvicorn[standard]    # ASGI 서버
 python-dotenv        # .env 환경변수 로드
 
+# ── LLM Agent (Decision Node) ──────────────────────────────────────
+ollama               # Ollama 로컬 LLM 클라이언트
+
 # ── Utilities ───────────────────────────────────────────────────────
 numpy                # 수치 연산
 requests             # Slack Webhook HTTP 요청 (선택)
