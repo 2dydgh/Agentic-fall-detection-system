@@ -15,6 +15,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agentic.graph import create_fall_detection_graph
 from agentic.state import AgentState
 from agentic.audio.extractor import AudioExtractor
+from agentic.agent.runner import AgentRunner
 
 load_dotenv()
 
@@ -32,6 +33,13 @@ base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 model_path = os.path.join(base_dir, "models/yolov26n-pose.pt")
 db_path = os.path.join(base_dir, "incidents.db")
 
+# 글로벌 토글
+audio_enabled = True
+agent_mode_enabled = False  # LLM Agent 판단 on/off
+
+# 글로벌 Agent Runner (모든 스트림에서 공유)
+_global_agent_runner = AgentRunner(db_path=db_path, skip_llm=True)
+
 def get_db_connection():
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -40,6 +48,40 @@ def get_db_connection():
 @app.get("/")
 def read_root():
     return {"status": "Fall Detection API is running"}
+
+@app.get("/api/audio_status")
+def get_audio_status():
+    """오디오 분석 상태 조회"""
+    return {"enabled": audio_enabled}
+
+@app.post("/api/audio_toggle")
+def toggle_audio():
+    """오디오 분석 on/off 토글"""
+    global audio_enabled
+    audio_enabled = not audio_enabled
+    return {"enabled": audio_enabled}
+
+@app.get("/api/agent_status")
+def get_agent_status():
+    """Agent Mode 상태 조회"""
+    return {"enabled": agent_mode_enabled}
+
+@app.post("/api/agent_toggle")
+def toggle_agent_mode():
+    """Agent Mode on/off 토글 (LLM 판단 vs 룰 기반)"""
+    global agent_mode_enabled
+    agent_mode_enabled = not agent_mode_enabled
+    mode = "LLM Agent" if agent_mode_enabled else "Rule-based"
+    print(f"[API] Decision mode changed: {mode}")
+    return {"enabled": agent_mode_enabled, "mode": mode}
+
+@app.get("/api/agent_results")
+def get_agent_results(limit: int = 20):
+    """비동기 Agent의 에스컬레이션 판단 결과 조회 (DB 영속 데이터)"""
+    if _global_agent_runner is None:
+        return {"results": []}
+    results = _global_agent_runner.get_results_from_db(limit=limit)
+    return {"results": results}
 
 @app.get("/api/incidents")
 def get_recent_incidents(limit: int = 20):
@@ -64,7 +106,10 @@ def get_recent_incidents(limit: int = 20):
                 "id": d.get("incident_id", str(d.get("id"))),
                 "timestamp": d.get("timestamp", ""),
                 "severity": d.get("severity", "LOW"),
-                "score": d.get("severity_score", 0)
+                "score": d.get("severity_score", 0),
+                "audio_scream": bool(d.get("audio_scream_detected", 0)),
+                "audio_impact": bool(d.get("audio_impact_detected", 0)),
+                "audio_confidence": d.get("audio_confidence", 0.0),
             })
 
         return {
@@ -92,7 +137,7 @@ class VideoStream:
     HEIGHT = 240        # 360 -> 240 (품질 낮춤)
     TARGET_FPS = 20.0   # 스트림 목표 FPS
 
-    def __init__(self, video_source: str):
+    def __init__(self, video_source: str, audio_source: str = None):
         self.video_source = video_source
         self.stopped = False
 
@@ -118,10 +163,15 @@ class VideoStream:
             email_receiver=os.getenv("EMAIL_RECEIVER"),
             skip_vlm=True,
             skip_audio=False,
+            agent_runner=_global_agent_runner,
         )
 
-        # 오디오 추출
-        self.audio_extractor = AudioExtractor.from_video_file(video_source, video_fps=self.TARGET_FPS)
+        # 오디오 추출 (별도 WAV 파일이 있으면 사용, 없으면 비디오에서 추출)
+        if audio_source and os.path.exists(audio_source):
+            self.audio_extractor = AudioExtractor.from_wav_file(audio_source, video_fps=self.TARGET_FPS)
+            print(f"[Stream] 별도 오디오 소스 사용: {audio_source} ({self.audio_extractor.duration_seconds:.1f}s)")
+        else:
+            self.audio_extractor = AudioExtractor.from_video_file(video_source, video_fps=self.TARGET_FPS)
 
         # 스레드 시작
         self._inference_thread = threading.Thread(target=self._inference_worker, daemon=True)
@@ -147,6 +197,8 @@ class VideoStream:
             "actions_taken": [],
             "incident_id": None,
             "snapshot_path": None,
+            # Decision Mode
+            "use_llm_decision": False,
             # Audio
             "audio_chunk": None,
             "audio_scream_detected": False,
@@ -164,7 +216,8 @@ class VideoStream:
 
             inference_frame_count += 1
             state["frame"] = frame
-            state["audio_chunk"] = self.audio_extractor.get_chunk_for_frame(inference_frame_count)
+            state["audio_chunk"] = self.audio_extractor.get_chunk_for_frame(inference_frame_count) if audio_enabled else None
+            state["use_llm_decision"] = agent_mode_enabled
             try:
                 result = self.graph.invoke(state)
                 state = result
@@ -253,11 +306,12 @@ class VideoStream:
 
 
 @app.get("/video_feed")
-async def video_feed(video_path: str = "input/02872_H_C_FY_C4.mp4"):
+async def video_feed(video_path: str = "input/02872_H_C_FY_C4.mp4", audio_path: str = None):
     """Returns the continuous MJPEG video stream"""
     from fastapi.responses import StreamingResponse
     source = os.path.join(base_dir, video_path)
-    stream = VideoStream(source)
+    audio_source = os.path.join(base_dir, audio_path) if audio_path else None
+    stream = VideoStream(source, audio_source=audio_source)
     return StreamingResponse(stream.generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 

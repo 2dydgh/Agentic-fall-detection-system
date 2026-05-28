@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from agentic.graph import create_fall_detection_graph
 from agentic.state import AgentState
 from agentic.audio.extractor import AudioExtractor
+from agentic.agent.runner import AgentRunner
 
 load_dotenv()
 
@@ -15,6 +16,7 @@ def main():
     parser.add_argument("--model", default="models/yolov26n-pose.pt", help="YOLO model path")
     parser.add_argument("--skip-vlm", action="store_true", help="Skip VLM analysis for faster processing")
     parser.add_argument("--skip-audio", action="store_true", help="Skip audio analysis")
+    parser.add_argument("--agent-mode", action="store_true", help="Use LLM agent for decision (requires Ollama)")
     args = parser.parse_args()
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -27,10 +29,16 @@ def main():
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     # LangGraph 생성
+    agent_runner = AgentRunner(
+        db_path=os.path.join(base_dir, "incidents.db"),
+        skip_llm=not args.agent_mode,
+    )
+
     print("🚀 Agentic Fall Detection 시스템 시작...")
     print(f"   - 입력: {video_path}")
     print(f"   - 모델: {model_path}")
     print(f"   - VLM: {'OFF' if args.skip_vlm else 'ON'}")
+    print(f"   - Agent Mode: {'ON (LLM)' if args.agent_mode else 'OFF (Rule)'}")
 
     graph = create_fall_detection_graph(
         model_path=model_path,
@@ -41,6 +49,7 @@ def main():
         email_receiver=os.getenv("EMAIL_RECEIVER"),
         skip_vlm=args.skip_vlm,
         skip_audio=args.skip_audio,
+        agent_runner=agent_runner,
     )
 
     # 비디오 처리
@@ -86,6 +95,8 @@ def main():
         "actions_taken": [],
         "incident_id": None,
         "snapshot_path": None,
+        # Decision Mode
+        "use_llm_decision": args.agent_mode,
         # Audio
         "audio_chunk": None,
         "audio_scream_detected": False,
@@ -160,6 +171,19 @@ def main():
 
     cap.release()
     out.release()
+
+    # 비동기 Agent 완료 대기 및 결과 출력
+    print("\n⏳ 비동기 Agent 판단 대기 중...")
+    agent_runner.wait_all(timeout=30.0)
+    agent_results = agent_runner.get_results()
+    if agent_results:
+        print(f"\n🧠 Agent 후속 판단 결과 ({len(agent_results)}건):")
+        for r in agent_results:
+            esc = "⚠️ 에스컬레이션 필요" if r.get("escalation_needed") else "✓ 추가 조치 불필요"
+            print(f"   [{r['incident_id']}] {esc}")
+            print(f"   → {r['final_assessment'][:100]}")
+    else:
+        print("\n🧠 비동기 Agent 판단: 해당 없음 (MEDIUM 이상 인시던트 없음)")
 
     print(f"\n✅ 처리 완료!")
     print(f"   - 총 프레임: {frame_count}")

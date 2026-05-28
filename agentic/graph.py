@@ -3,6 +3,7 @@ from .state import AgentState
 from .nodes.perception import PerceptionNode
 from .nodes.decision import decision_node
 from .nodes.action import ActionNode
+from .agent.runner import AgentRunner
 
 # Analysis Node는 무거우니까 lazy load
 _analysis_node = None
@@ -24,6 +25,7 @@ def create_fall_detection_graph(
     email_receiver: str = None,
     skip_vlm: bool = False,
     skip_audio: bool = False,
+    agent_runner=None,
 ):
     """LangGraph 워크플로우 생성 (비전 + 오디오 멀티모달)"""
 
@@ -31,12 +33,18 @@ def create_fall_detection_graph(
     perception = PerceptionNode(model_path)
     from .nodes.audio import AudioNode
     audio = AudioNode(skip_model=skip_audio)
+
+    # Agent Runner: 외부 주입 또는 내부 생성
+    if agent_runner is None:
+        agent_runner = AgentRunner(db_path=db_path, skip_llm=skip_audio)
+
     action = ActionNode(
-        db_path=db_path, 
+        db_path=db_path,
         slack_webhook=slack_webhook,
         email_sender=email_sender,
         email_password=email_password,
-        email_receiver=email_receiver
+        email_receiver=email_receiver,
+        agent_runner=agent_runner,
     )
 
     # 그래프 정의
@@ -71,7 +79,11 @@ def create_fall_detection_graph(
     def decision_node_wrapper(state: AgentState) -> AgentState:
         if not state.get("fall_detected"):
             return state
-        result = decision_node(state)
+        if state.get("use_llm_decision"):
+            from .nodes.decision_llm import decision_node_llm
+            result = decision_node_llm(state)
+        else:
+            result = decision_node(state)
         return {**state, **result}
 
     def action_node_func(state: AgentState) -> AgentState:

@@ -18,7 +18,8 @@ class ActionNode:
         slack_webhook: Optional[str] = None,
         email_sender: Optional[str] = None,
         email_password: Optional[str] = None,
-        email_receiver: Optional[str] = None
+        email_receiver: Optional[str] = None,
+        agent_runner=None
     ):
         self.db_path = db_path
         self.snapshot_dir = snapshot_dir
@@ -27,6 +28,7 @@ class ActionNode:
         self.email_sender = email_sender
         self.email_password = email_password
         self.email_receiver = email_receiver
+        self.agent_runner = agent_runner
 
         init_db(db_path)
 
@@ -46,7 +48,10 @@ class ActionNode:
                 severity=severity,
                 scene_description=state.get("scene_description", ""),
                 severity_score=state.get("severity_score", 0),
-                actions_taken=actions
+                actions_taken=actions,
+                audio_scream_detected=state.get("audio_scream_detected", False),
+                audio_impact_detected=state.get("audio_impact_detected", False),
+                audio_confidence=state.get("audio_confidence", 0.0),
             )
             actions_taken.append({"tool": "log_to_db", "incident_id": incident_id})
 
@@ -96,6 +101,21 @@ class ActionNode:
                 report_path=report_path
             )
             actions_taken.append({"tool": "send_email_alert", "success": success})
+
+        # 6. 비동기 Agent 디스패치 (블로킹하지 않음)
+        if self.agent_runner is not None:
+            self.agent_runner.dispatch({
+                "incident_id": incident_id,
+                "severity": severity,
+                "severity_score": state.get("severity_score", 0),
+                "scene_description": state.get("scene_description", ""),
+                "estimated_age": state.get("estimated_age", "unknown"),
+                "location_type": state.get("location_type", "other"),
+                "audio_scream_detected": state.get("audio_scream_detected", False),
+                "audio_impact_detected": state.get("audio_impact_detected", False),
+                "no_movement_seconds": state.get("no_movement_seconds", 0),
+            })
+            actions_taken.append({"tool": "async_agent_dispatched"})
 
         return {
             "actions_taken": actions_taken,
