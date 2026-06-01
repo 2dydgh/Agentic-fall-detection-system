@@ -356,7 +356,23 @@ Agentic-fall-detection-system/
 │   └── tools/                # 보조 도구 모음
 ├── api/
 │   └── main.py               # FastAPI 라우터 & MJPEG 스트리밍
-├── frontend/                 # Next.js 대시보드
+├── frontend/
+│   └── src/
+│       ├── app/
+│       │   ├── page.tsx          # 메인 페이지 (orchestrator, ~35줄)
+│       │   ├── layout.tsx        # 레이아웃 (Inter + Roboto Mono)
+│       │   └── globals.css       # Grafana 테마 + 애니메이션
+│       ├── components/
+│       │   ├── Sidebar.tsx       # 아이콘 네비게이션 사이드바
+│       │   ├── Header.tsx        # 헤더 + 알림 배너
+│       │   ├── CameraCard.tsx    # 개별 카메라 + 낙상 오버레이
+│       │   ├── CameraGrid.tsx    # 2x2 ↔ 포커스 전환 그리드
+│       │   ├── BottomBar.tsx     # 하단 바 컨테이너
+│       │   ├── StatsPanel.tsx    # 통계 패널
+│       │   ├── MonitorTable.tsx  # 카메라별 실시간 모니터링
+│       │   └── HistoryPanel.tsx  # 카메라별 인시던트 히스토리
+│       ├── hooks/                # useIncidents, useAudioStatus, useClock 등
+│       └── types/index.ts        # 공유 타입 + CAMERAS 상수
 ├── figures/                  # 스크린샷 및 구동 화면
 ├── main_agentic.py           # 메인 실행 진입점
 └── requirements.txt
