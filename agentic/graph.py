@@ -63,8 +63,7 @@ def create_fall_detection_graph(
         return {**state, **result}
 
     def analysis_node(state: AgentState) -> AgentState:
-        if not state.get("fall_detected") or skip_vlm:
-            # VLM 스킵 시 기본값
+        if skip_vlm:
             return {
                 **state,
                 "scene_description": "Fall detected",
@@ -77,8 +76,6 @@ def create_fall_detection_graph(
         return {**state, **result}
 
     def decision_node_wrapper(state: AgentState) -> AgentState:
-        if not state.get("fall_detected"):
-            return state
         if state.get("use_llm_decision"):
             from .nodes.decision_llm import decision_node_llm
             result = decision_node_llm(state)
@@ -87,8 +84,6 @@ def create_fall_detection_graph(
         return {**state, **result}
 
     def action_node_func(state: AgentState) -> AgentState:
-        if not state.get("fall_detected"):
-            return state
         result = action.process(state)
         return {**state, **result}
 
@@ -99,10 +94,24 @@ def create_fall_detection_graph(
     graph.add_node("decision", decision_node_wrapper)
     graph.add_node("action", action_node_func)
 
-    # 엣지 연결: perception → audio → analysis → decision → action
+    # --- 조건 분기: 낙상 감지 여부에 따라 분석 경로 또는 즉시 종료 ---
+    def route_after_audio(state: AgentState) -> str:
+        if state.get("fall_detected"):
+            return "analysis"
+        return END
+
+    # 엣지 연결
+    # perception → audio는 항상 실행 (매 프레임 포즈 추정 + 오디오 분석)
     graph.set_entry_point("perception")
     graph.add_edge("perception", "audio")
-    graph.add_edge("audio", "analysis")
+
+    # audio 이후 조건 분기: 낙상 감지 시에만 후속 분석
+    graph.add_conditional_edges("audio", route_after_audio, {
+        "analysis": "analysis",
+        END: END,
+    })
+
+    # 낙상 감지 경로: analysis → decision → action → END
     graph.add_edge("analysis", "decision")
     graph.add_edge("decision", "action")
     graph.add_edge("action", END)

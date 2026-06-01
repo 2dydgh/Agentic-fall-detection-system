@@ -37,14 +37,16 @@
 │                    2-Track Architecture                               │
 │                                                                      │
 │  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  실시간 경로 — 고정 파이프라인 (~0.001ms)                        │  │
-│  │  Agent 아님. 정해진 순서대로 실행. 선택권 없음.                  │  │
+│  │  실시간 경로 — 조건 분기 파이프라인 (~0.001ms)                    │  │
+│  │  Agent 아님. 낙상 감지 여부에 따라 경로가 갈린다.                │  │
 │  │                                                                │  │
 │  │  📹 CCTV    🎤 Audio                                           │  │
 │  │    │          │                                                │  │
 │  │    ▼          ▼                                                │  │
-│  │  Perception → Audio → Analysis → Decision → Action             │  │
-│  │  (YOLO11n)  (YAMNet) (Florence-2) (룰 or LLM) (알림/DB)       │  │
+│  │  Perception → Audio → fall_detected?                           │  │
+│  │  (YOLO11n)  (YAMNet)   ├─ Yes → Analysis → Decision → Action  │  │
+│  │                        │       (Florence-2) (룰/LLM) (알림/DB) │  │
+│  │                        └─ No  → END (즉시 종료)                │  │
 │  └──────────────────────────────────────────────────│─────────────┘  │
 │                                                     │                │
 │                                  낙상 감지 시 dispatch (별도 스레드)  │
@@ -53,15 +55,14 @@
 │  │  비동기 경로 — 진짜 AI Agent                                    │  │
 │  │  LLM이 스스로 판단하고 도구를 선택. 실시간 경로 블로킹 없음.     │  │
 │  │                                                                │  │
-│  │  EscalationAgent (ReAct 루프, max 4회, timeout 30s)            │  │
+│  │  EscalationAgent (LangGraph ReAct 그래프, max 4회, timeout 30s)│  │
 │  │  ┌──────────────────────────────────────────────────────────┐  │  │
-│  │  │  Ollama LLM (llama3.2)                                   │  │  │
-│  │  │    │                                                     │  │  │
-│  │  │    ├─ "이력 조회해야겠다" → query_incident_history        │  │  │
-│  │  │    ├─ "VLM으로 다시 보자" → reanalyze_with_vlm           │  │  │
-│  │  │    ├─ "119 불러야 해"    → escalate_emergency            │  │  │
-│  │  │    ├─ "심각도 올려야 해"  → update_severity               │  │  │
-│  │  │    └─ "분석 끝"          → done                          │  │  │
+│  │  │  reason (Ollama LLM) ──(조건 분기)──▶ act (도구 실행)    │  │  │
+│  │  │    │                                   │                 │  │  │
+│  │  │    └──(done/timeout/max)──▶ END        └──▶ reason (루프)│  │  │
+│  │  │                                                          │  │  │
+│  │  │  도구: query_incident_history, reanalyze_with_vlm,       │  │  │
+│  │  │        escalate_emergency, update_severity               │  │  │
 │  │  └──────────────────────────────────────────────────────────┘  │  │
 │  │                     │                                          │  │
 │  │                     ▼                                          │  │
@@ -82,10 +83,10 @@
 
 | 구분 | 실시간 경로 (파이프라인) | 비동기 경로 (Agent) |
 |------|----------------------|-------------------|
-| **흐름** | 고정 (A→B→C→D→E 일직선) | 동적 (LLM이 매번 다르게 결정) |
+| **흐름** | 조건 분기 (fall_detected 여부로 경로 분기) | 동적 (LLM이 매번 다르게 결정) |
 | **도구 선택** | 없음 — 정해진 처리만 실행 | LLM이 4개 도구 중 스스로 선택 |
-| **루프** | 없음 — 한 번 실행하고 끝 | 결과를 보고 다음 행동을 판단 |
-| **종료** | 마지막 노드에서 자동 종료 | Agent가 "끝"이라고 판단하면 종료 |
+| **루프** | 없음 — 한 번 실행하고 끝 | reason → act → reason 피드백 루프 |
+| **종료** | 낙상 미감지 시 즉시 종료 / 감지 시 Action 후 종료 | Agent가 "끝"이라고 판단하면 종료 |
 | **속도** | ~0.001ms (실측) | 최대 30초 (비블로킹) |
 | **역할** | 즉시 대응 (골든타임 확보) | 정밀 분석 (에스컬레이션 판단) |
 
@@ -411,16 +412,17 @@ Agentic-fall-detection-system/
 
 ---
 
-### 8. 🧠 비동기 에스컬레이션 Agent — ReAct 루프 기반 후속 판단
+### 8. 🧠 비동기 에스컬레이션 Agent — LangGraph ReAct 그래프 기반 후속 판단
 
 ```
-[실시간 경로 — 즉시 대응]                [비동기 경로 — 후속 판단]
-Perception → Decision → Action ──────▶ EscalationAgent (별도 스레드)
-         (~0.001ms, 룰 기반)                      │
-         즉시 알림 전송                        ├─ 1. 과거 이력 조회 (Tool Call)
-                                              ├─ 2. LLM 상황 분석 (Reasoning)
-                                              ├─ 3. 에스컬레이션 판단 (Tool Call)
-                                              └─ 4. 결과 DB 저장 (agent_results)
+[실시간 경로 — 즉시 대응]                [비동기 경로 — LangGraph ReAct 그래프]
+Perception → Audio → fall?             EscalationAgent (별도 스레드)
+  └─ Yes → Decision → Action ────▶       reason ──(조건)──▶ act ──▶ reason
+  └─ No  → END                             │                       (루프)
+                                            └──(done/timeout)──▶ END
+                                                     │
+                                                     ▼
+                                              agent_results DB 저장
 ```
 
 | 항목 | 내용 |

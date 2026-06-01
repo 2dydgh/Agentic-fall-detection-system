@@ -1,13 +1,21 @@
 """
-비동기 에스컬레이션 Agent — ReAct (Reason + Act) 루프.
+비동기 에스컬레이션 Agent — LangGraph ReAct 그래프.
 
 실시간 경로에서 낙상이 감지된 후, 이 Agent가 비동기로 실행되어:
 1. 과거 인시던트 이력을 조회 (Tool Call)
 2. 상황을 종합 분석 (LLM Reasoning)
 3. 에스컬레이션 여부를 결정 (Tool Call)
 4. 결과를 확인하고 추가 행동 여부를 판단 (Loop)
+
+기존 순수 Python for 루프를 LangGraph StateGraph로 전환하여
+조건부 분기(reason → act or END)와 피드백 루프(act → reason)를
+그래프 구조로 명시적으로 표현한다.
 """
 import json
+import time
+from typing import TypedDict
+
+from langgraph.graph import StateGraph, END
 from .tools import TOOL_SCHEMAS, execute_tool
 
 _llm_client = None
@@ -43,8 +51,159 @@ IMPORTANT RULES:
 - For final answer, respond with: {{"done": true, "final_assessment": "...", "escalation_needed": true/false}}"""
 
 
+# ---------------------------------------------------------------------------
+# LangGraph ReAct 그래프 상태
+# ---------------------------------------------------------------------------
+
+class _ReActState(TypedDict):
+    messages: list[dict]
+    actions_taken: list[dict]
+    context: dict
+    iteration: int
+    max_iterations: int
+    timeout: float
+    start_time: float
+    final_assessment: str
+    escalation_needed: bool
+    pending_tool: str
+    pending_args: dict
+
+
+# ---------------------------------------------------------------------------
+# 그래프 노드
+# ---------------------------------------------------------------------------
+
+def _reason_node(state: _ReActState) -> dict:
+    """LLM이 다음 행동을 결정한다 (Reason 단계)"""
+    client = _get_client()
+
+    response = client.chat(
+        model=OLLAMA_MODEL,
+        messages=state["messages"],
+        format="json",
+    )
+    content = response["message"]["content"]
+
+    new_messages = state["messages"] + [{"role": "assistant", "content": content}]
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return {
+            "messages": new_messages,
+            "final_assessment": content,
+            "escalation_needed": False,
+            "pending_tool": "",
+            "pending_args": {},
+        }
+
+    # Agent가 완료를 선언한 경우
+    if parsed.get("done"):
+        return {
+            "messages": new_messages,
+            "final_assessment": parsed.get("final_assessment", ""),
+            "escalation_needed": parsed.get("escalation_needed", False),
+            "pending_tool": "",
+            "pending_args": {},
+        }
+
+    # Tool Call 요청
+    return {
+        "messages": new_messages,
+        "pending_tool": parsed.get("tool", ""),
+        "pending_args": parsed.get("args", {}),
+    }
+
+
+def _act_node(state: _ReActState) -> dict:
+    """도구를 실행하고 결과를 메시지에 추가한다 (Act 단계)"""
+    tool_name = state["pending_tool"]
+    tool_args = dict(state["pending_args"])
+    context = state["context"]
+
+    # db_path를 context에서 주입 (보안: LLM이 임의 경로 접근 방지)
+    if "db_path" in {
+        p for s in TOOL_SCHEMAS if s["name"] == tool_name
+        for p in s["parameters"].get("properties", {})
+    }:
+        tool_args["db_path"] = context["db_path"]
+
+    result = execute_tool(tool_name, tool_args)
+
+    iteration = state["iteration"] + 1
+    print(f"[Agent] Iteration {iteration}: called {tool_name} -> {result}")
+
+    new_messages = state["messages"] + [{
+        "role": "user",
+        "content": f"Tool '{tool_name}' result: {json.dumps(result, ensure_ascii=False, default=str)}",
+    }]
+
+    new_actions = state["actions_taken"] + [{
+        "tool": tool_name,
+        "args": tool_args,
+        "result": result,
+    }]
+
+    return {
+        "messages": new_messages,
+        "actions_taken": new_actions,
+        "iteration": iteration,
+        "pending_tool": "",
+        "pending_args": {},
+    }
+
+
+# ---------------------------------------------------------------------------
+# 조건 분기: reason 이후 act로 갈지, 종료할지
+# ---------------------------------------------------------------------------
+
+def _route_after_reason(state: _ReActState) -> str:
+    """LLM 응답을 보고 다음 경로를 결정한다"""
+    # 타임아웃 체크
+    if time.time() - state["start_time"] > state["timeout"]:
+        return END
+    # max_iterations 체크
+    if state["iteration"] >= state["max_iterations"]:
+        return END
+    # Tool Call이 있으면 act로, 없으면 종료 (done 또는 파싱 실패)
+    if state.get("pending_tool"):
+        return "act"
+    return END
+
+
+# ---------------------------------------------------------------------------
+# 그래프 빌드
+# ---------------------------------------------------------------------------
+
+def _build_react_graph():
+    """
+    ReAct 루프를 LangGraph StateGraph로 구성.
+
+        reason ──(조건)──▶ act ──▶ reason  (피드백 루프)
+          │
+          └──(done/timeout/max)──▶ END
+    """
+    graph = StateGraph(_ReActState)
+
+    graph.add_node("reason", _reason_node)
+    graph.add_node("act", _act_node)
+
+    graph.set_entry_point("reason")
+    graph.add_conditional_edges("reason", _route_after_reason, {
+        "act": "act",
+        END: END,
+    })
+    graph.add_edge("act", "reason")  # 피드백 루프: 도구 결과를 보고 다시 판단
+
+    return graph.compile()
+
+
+# ---------------------------------------------------------------------------
+# 외부 인터페이스 (기존과 동일)
+# ---------------------------------------------------------------------------
+
 class EscalationAgent:
-    """ReAct 루프 기반 에스컬레이션 Agent"""
+    """LangGraph ReAct 그래프 기반 에스컬레이션 Agent"""
 
     def __init__(self, skip_llm: bool = False, max_iterations: int = 4, timeout: float = 30.0):
         self._skip_llm = skip_llm
@@ -61,13 +220,10 @@ class EscalationAgent:
         if self._skip_llm:
             return self._fallback_rules(context)
 
-        return self._react_loop(context)
+        return self._run_graph(context)
 
-    def _react_loop(self, context: dict) -> dict:
-        """LLM 기반 ReAct 루프 (max_iterations + timeout 이중 안전장치)"""
-        import time
-        start_time = time.time()
-
+    def _run_graph(self, context: dict) -> dict:
+        """LangGraph ReAct 그래프 실행"""
         tool_descriptions = "\n".join(
             f"- {t['name']}: {t['description']}" for t in TOOL_SCHEMAS
         )
@@ -87,82 +243,40 @@ class EscalationAgent:
             f"Analyze this situation. Start by checking incident history."
         )
 
-        messages = [
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ]
-
-        actions_taken = []
+        initial_state: _ReActState = {
+            "messages": [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            "actions_taken": [],
+            "context": context,
+            "iteration": 0,
+            "max_iterations": self._max_iterations,
+            "timeout": self._timeout,
+            "start_time": time.time(),
+            "final_assessment": "",
+            "escalation_needed": False,
+            "pending_tool": "",
+            "pending_args": {},
+        }
 
         try:
-            client = _get_client()
+            graph = _build_react_graph()
+            final_state = graph.invoke(initial_state)
 
-            for i in range(self._max_iterations):
-                # 타임아웃 체크
-                if time.time() - start_time > self._timeout:
-                    return {
-                        "actions_taken": actions_taken,
-                        "final_assessment": f"Timeout after {self._timeout}s. Manual review recommended.",
-                        "escalation_needed": False,
-                    }
+            assessment = final_state.get("final_assessment", "")
+            if not assessment and final_state["iteration"] >= self._max_iterations:
+                assessment = "Max iterations reached. Manual review recommended."
+            elif not assessment:
+                assessment = f"Timeout after {self._timeout}s. Manual review recommended."
 
-                response = client.chat(
-                    model=OLLAMA_MODEL,
-                    messages=messages,
-                    format="json",
-                )
-                content = response["message"]["content"]
-                messages.append({"role": "assistant", "content": content})
-
-                parsed = json.loads(content)
-
-                # 종료 조건: Agent가 완료 선언
-                if parsed.get("done"):
-                    return {
-                        "actions_taken": actions_taken,
-                        "final_assessment": parsed.get("final_assessment", ""),
-                        "escalation_needed": parsed.get("escalation_needed", False),
-                    }
-
-                # Tool Call 실행
-                tool_name = parsed.get("tool")
-                tool_args = parsed.get("args", {})
-
-                if tool_name:
-                    # db_path를 context에서 주입 (보안: LLM이 임의 경로 접근 방지)
-                    if "db_path" in {p for s in TOOL_SCHEMAS if s["name"] == tool_name for p in s["parameters"].get("properties", {})}:
-                        tool_args["db_path"] = context["db_path"]
-
-                    result = execute_tool(tool_name, tool_args)
-                    actions_taken.append({
-                        "tool": tool_name,
-                        "args": tool_args,
-                        "result": result,
-                    })
-
-                    # 도구 결과를 대화에 추가하여 LLM이 다음 판단에 활용
-                    messages.append({
-                        "role": "user",
-                        "content": f"Tool '{tool_name}' result: {json.dumps(result, ensure_ascii=False, default=str)}",
-                    })
-                    print(f"[Agent] Iteration {i+1}: called {tool_name} -> {result}")
-                else:
-                    # 도구 호출도 종료 선언도 아닌 경우 종료
-                    return {
-                        "actions_taken": actions_taken,
-                        "final_assessment": content,
-                        "escalation_needed": False,
-                    }
-
-            # max_iterations 도달
             return {
-                "actions_taken": actions_taken,
-                "final_assessment": "Max iterations reached. Manual review recommended.",
-                "escalation_needed": False,
+                "actions_taken": final_state.get("actions_taken", []),
+                "final_assessment": assessment,
+                "escalation_needed": final_state.get("escalation_needed", False),
             }
-
         except Exception as e:
-            print(f"[Agent] ReAct loop error, falling back to rules: {e}")
+            print(f"[Agent] ReAct graph error, falling back to rules: {e}")
             return self._fallback_rules(context)
 
     def _fallback_rules(self, context: dict) -> dict:
