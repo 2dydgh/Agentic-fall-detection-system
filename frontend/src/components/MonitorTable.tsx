@@ -38,12 +38,12 @@ export function MonitorTable({ incidents, selectedCam, onSelectCam }: {
   return (
     <div className="flex flex-col h-full p-3">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-semibold text-g-text">Live Monitoring</span>
-        <span className="text-xs text-g-muted font-mono">{incidents.length} total</span>
+        <span className="text-base font-semibold text-g-text">Live Monitoring</span>
+        <span className="text-sm text-g-muted font-mono">{incidents.length} total</span>
       </div>
 
       {/* Header */}
-      <div className="grid grid-cols-[1fr_1.5fr_1.2fr_1fr_1.2fr_1fr] gap-2 px-2 py-1.5 text-[11px] text-g-muted uppercase tracking-wider border-b border-g-border">
+      <div className="grid grid-cols-[1fr_1.5fr_1.2fr_1fr_1.2fr_1fr] gap-2 px-2 py-1.5 text-xs text-g-muted uppercase tracking-wider border-b border-g-border">
         <span>CAM</span>
         <span>Location</span>
         <span>Severity</span>
@@ -65,7 +65,7 @@ export function MonitorTable({ incidents, selectedCam, onSelectCam }: {
             <div
               key={cam.id}
               onClick={() => onSelectCam(isSelected ? null : cam.id)}
-              className={`grid grid-cols-[1fr_1.5fr_1.2fr_1fr_1.2fr_1fr] gap-2 px-2 py-2 text-xs items-center border-b border-g-border/50 cursor-pointer hover:bg-g-border/20 transition-colors ${rowBg} ${isSelected ? "border-l-2 border-l-g-blue" : ""}`}
+              className={`grid grid-cols-[1fr_1.5fr_1.2fr_1fr_1.2fr_1fr] gap-2 px-2 py-2 text-sm items-center border-b border-g-border/50 cursor-pointer hover:bg-g-border/20 transition-colors ${rowBg} ${isSelected ? "border-l-2 border-l-g-blue" : ""}`}
             >
               <span className="text-g-text font-medium">{cam.id}</span>
               <span className="text-g-text-muted">{cam.label}</span>
@@ -78,7 +78,7 @@ export function MonitorTable({ incidents, selectedCam, onSelectCam }: {
                 ) : <span className="text-g-border-light">—</span>}
               </span>
               <span className={`font-medium font-mono ${severityColor(severity)}`}>{cam.latest?.score || "—"}</span>
-              <span className={`text-[10px] font-mono ${cam.isActive ? "text-g-red" : "text-g-muted"}`}>
+              <span className={`text-xs font-mono ${cam.isActive ? "text-g-red" : "text-g-muted"}`}>
                 {cam.latest ? timeAgo(cam.latest.timestamp) : "—"}
               </span>
               <span className="text-g-muted text-center font-mono">{cam.totalIncidents}</span>
