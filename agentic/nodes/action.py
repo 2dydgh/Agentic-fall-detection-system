@@ -52,6 +52,7 @@ class ActionNode:
                 audio_scream_detected=state.get("audio_scream_detected", False),
                 audio_impact_detected=state.get("audio_impact_detected", False),
                 audio_confidence=state.get("audio_confidence", 0.0),
+                camera_id=state.get("camera_id", "01"),
             )
             actions_taken.append({"tool": "log_to_db", "incident_id": incident_id})
 

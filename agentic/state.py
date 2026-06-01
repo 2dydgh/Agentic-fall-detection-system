@@ -31,6 +31,9 @@ class AgentState(TypedDict):
     # Decision Mode
     use_llm_decision: bool  # True: LLM Agent 판단, False: 룰 기반 (기본)
 
+    # Camera
+    camera_id: str
+
     # Action Node
     actions_taken: list[dict]
     incident_id: Optional[str]

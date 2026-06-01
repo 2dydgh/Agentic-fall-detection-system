@@ -1,26 +1,82 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --color-g-bg: #111217;
+  --color-g-panel: #181b1f;
+  --color-g-border: #2a2d35;
+  --color-g-border2: #34383f;
+  --color-g-text: #d8d9da;
+  --color-g-muted: #8e8e8e;
+  --color-g-orange: #ff6600;
+  --color-g-green: #73bf69;
+  --color-g-red: #f2495c;
+  --color-g-blue: #5794f2;
+  --color-g-yellow: #fade2a;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-g-bg);
+  color: var(--color-g-text);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #34383f;
+  border-radius: 2px;
+}
+
+/* Alert pulse animation for camera borders */
+@keyframes alert-pulse {
+  0%, 100% { border-color: #f2495c; }
+  50% { border-color: rgba(242, 73, 92, 0.3); }
+}
+
+.alert-pulse {
+  animation: alert-pulse 1.5s ease-in-out infinite;
+}
+
+/* Full-screen overlay flash */
+@keyframes alert-overlay-flash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.alert-overlay {
+  animation: alert-overlay-flash 2s ease-in-out infinite;
+}
+
+/* Text glow for HIGH severity */
+@keyframes alert-text-glow {
+  0%, 100% { text-shadow: 0 0 10px rgba(242, 73, 92, 0.8), 0 0 30px rgba(242, 73, 92, 0.4); }
+  50% { text-shadow: 0 0 20px rgba(242, 73, 92, 1), 0 0 50px rgba(242, 73, 92, 0.6); }
+}
+
+.alert-text {
+  animation: alert-text-glow 1.5s ease-in-out infinite;
+}
+
+/* History panel slide animation */
+.history-panel {
+  transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1), opacity 200ms ease;
+}
+
+.history-panel-closed {
+  width: 0;
+  opacity: 0;
+  padding: 0;
+  border-width: 0;
+}
+
+.history-panel-open {
+  width: 380px;
+  opacity: 1;
 }

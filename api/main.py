@@ -104,6 +104,7 @@ def get_recent_incidents(limit: int = 20):
             d = dict(log)
             formatted_logs.append({
                 "id": d.get("incident_id", str(d.get("id"))),
+                "camera_id": d.get("camera_id", "01"),
                 "timestamp": d.get("timestamp", ""),
                 "severity": d.get("severity", "LOW"),
                 "score": d.get("severity_score", 0),
@@ -133,12 +134,13 @@ class VideoStream:
     """
 
     FRAME_SKIP = 8      # 추론 스킵 (8프레임마다 YOLO 실행)
-    WIDTH = 320         # 480 -> 320 (품질 낮춤)
-    HEIGHT = 240        # 360 -> 240 (품질 낮춤)
+    WIDTH = 640
+    HEIGHT = 480
     TARGET_FPS = 20.0   # 스트림 목표 FPS
 
-    def __init__(self, video_source: str, audio_source: str = None):
+    def __init__(self, video_source: str, audio_source: str = None, camera_id: str = "01"):
         self.video_source = video_source
+        self.camera_id = camera_id
         self.stopped = False
 
         # 최신 annotated 프레임 (스트리밍 스레드가 읽음)
@@ -197,6 +199,8 @@ class VideoStream:
             "actions_taken": [],
             "incident_id": None,
             "snapshot_path": None,
+            # Camera
+            "camera_id": self.camera_id,
             # Decision Mode
             "use_llm_decision": False,
             # Audio
@@ -236,23 +240,12 @@ class VideoStream:
                 self.last_score = result.get("severity_score", 0)
                 print(f"🚨 [Stream] 낙상 감지! 심각도={self.last_severity}, 점수={self.last_score}")
 
-            # 알럿 오버레이 그리기
+            # 알럿 카운트다운 (프론트엔드가 오버레이 담당)
             if self.alert_frames_remaining > 0:
-                color = {"LOW": (0, 255, 0), "MEDIUM": (0, 165, 255), "HIGH": (0, 0, 255)}.get(self.last_severity, (0, 255, 0))
-                w, h = self.WIDTH, self.HEIGHT
-                cv2.rectangle(annotated, (10, 10), (310, 80), (0, 0, 0), -1)
-                cv2.rectangle(annotated, (10, 10), (310, 80), color, 2)
-                cv2.putText(annotated, f"FALL: {self.last_severity} ({self.last_score}/100)",
-                            (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-                if self.last_severity in ["HIGH", "MEDIUM"]:
-                    cv2.putText(annotated, "FALL DETECTED!",
-                                (w // 2 - 120, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 3)
-                if self.last_severity == "HIGH":
-                    cv2.rectangle(annotated, (0, 0), (w, h), (0, 0, 255), 8)
                 self.alert_frames_remaining -= 1
 
             # JPEG 인코딩 후 공유 변수에 저장 (Quality 40으로 낮춰 전송 속도 향상)
-            _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 40])
+            _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
             with self.latest_lock:
                 self.latest_annotated = buf.tobytes()
 
@@ -290,7 +283,7 @@ class VideoStream:
 
                 if frame_bytes is None:
                     # 추론 결과 아직 없음 → 원본 프레임 그냥 전송 (Quality 40)
-                    _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
+                    _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                     frame_bytes = buf.tobytes()
 
                 yield (b'--frame\r\n'
@@ -306,12 +299,12 @@ class VideoStream:
 
 
 @app.get("/video_feed")
-async def video_feed(video_path: str = "input/02872_H_C_FY_C4.mp4", audio_path: str = None):
+async def video_feed(video_path: str = "input/02872_H_C_FY_C4.mp4", audio_path: str = None, camera_id: str = "01"):
     """Returns the continuous MJPEG video stream"""
     from fastapi.responses import StreamingResponse
     source = os.path.join(base_dir, video_path)
     audio_source = os.path.join(base_dir, audio_path) if audio_path else None
-    stream = VideoStream(source, audio_source=audio_source)
+    stream = VideoStream(source, audio_source=audio_source, camera_id=camera_id)
     return StreamingResponse(stream.generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
@@ -374,22 +367,22 @@ def seed_demo_data():
     conn = get_db_connection()
 
     samples = [
-        ("HIGH",   92, "Elder person fell near staircase. No movement for 8s."),
-        ("HIGH",   87, "Individual collapsed in corridor. Possible head injury."),
-        ("MEDIUM", 65, "Person slipped in bathroom. Sitting on floor."),
-        ("MEDIUM", 58, "Subject fell near entrance. Got up after 3s."),
-        ("LOW",    32, "Person crouched quickly. Recovered immediately."),
-        ("HIGH",   95, "Fall detected in living room. No response for 12s."),
+        ("01", "HIGH",   92, "Elder person fell near staircase. No movement for 8s."),
+        ("01", "HIGH",   87, "Individual collapsed in corridor. Possible head injury."),
+        ("02", "MEDIUM", 65, "Person slipped in bathroom. Sitting on floor."),
+        ("03", "MEDIUM", 58, "Subject fell near entrance. Got up after 3s."),
+        ("02", "LOW",    32, "Person crouched quickly. Recovered immediately."),
+        ("03", "HIGH",   95, "Fall detected in living room. No response for 12s."),
     ]
 
     now = datetime.now()
-    for i, (sev, score, desc) in enumerate(samples):
+    for i, (cam_id, sev, score, desc) in enumerate(samples):
         ts = now - timedelta(minutes=i * 7 + 2)
         inc_id = f"INC-{ts.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         try:
             conn.execute(
-                "INSERT INTO incidents (incident_id, timestamp, severity, severity_score, scene_description, actions_taken) VALUES (?,?,?,?,?,?)",
-                (inc_id, ts.isoformat(), sev, score, desc, '["log_to_db","save_snapshot","notify_security_room"]')
+                "INSERT INTO incidents (incident_id, camera_id, timestamp, severity, severity_score, scene_description, actions_taken) VALUES (?,?,?,?,?,?,?)",
+                (inc_id, cam_id, ts.isoformat(), sev, score, desc, '["log_to_db","save_snapshot","notify_security_room"]')
             )
         except Exception:
             pass  # 중복 무시

@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🚨 Agentic AI 낙상 감지 시스템
+# Agentic AI 낙상 감지 시스템
 ### Multi-Zone Real-Time Fall Detection with Agentic Workflow
 
 <br/>
@@ -20,17 +20,17 @@
 
 ---
 
-## 📺 시스템 구동 화면
+## 시스템 구동 화면
 
 <div align="center">
-  <img src="figures/website.png" alt="System Demo" width="1000" />
+  <img src="figures/demo.gif" alt="System Demo" width="1000" />
   <br/>
-  <sub><b>다중 구역(Multi-Zone) 모니터링 관제 대시보드</b><br/>복도·병실·야외 등 다중 CCTV 영상을 스크롤 없이 한눈에 파악할 수 있는 다크 그레이 테마의 통합 관제 UI</sub>
+  <sub><b>다중 구역(Multi-Zone) 모니터링 관제 대시보드</b><br/>복도·병실·야외·화장실 4개 CCTV를 실시간 관제하는 Grafana 스타일 통합 대시보드</sub>
 </div>
 
 ---
 
-## 🏗️ 시스템 아키텍처
+## 시스템 아키텍처
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -40,7 +40,7 @@
 │  │  실시간 경로 — 조건 분기 파이프라인 (~0.001ms)                    │  │
 │  │  Agent 아님. 낙상 감지 여부에 따라 경로가 갈린다.                │  │
 │  │                                                                │  │
-│  │  📹 CCTV    🎤 Audio                                           │  │
+│  │  CCTV       Audio                                              │  │
 │  │    │          │                                                │  │
 │  │    ▼          ▼                                                │  │
 │  │  Perception → Audio → fall_detected?                           │  │
@@ -94,9 +94,9 @@
 
 ---
 
-## 📌 핵심 개발 내용 및 성과
+## 핵심 개발 내용 및 성과
 
-### 1. 🤖 Agentic Workflow 설계 — LangGraph 기반 자율 판단 파이프라인
+### 1. Agentic Workflow 설계 — LangGraph 기반 자율 판단 파이프라인
 
 | 항목 | 내용 |
 |------|------|
@@ -104,11 +104,11 @@
 | **해결 방법** | LangGraph로 `PerceptionNode → AudioNode → AnalysisNode → DecisionNode → ActionNode` 파이프라인 구현 |
 | **핵심 효과** | 비전 + 오디오 멀티모달 Late Fusion, 장소/위험 요소에 따라 동적으로 **심각도(Severity) 점수** 산출 |
 
-> 🎯 **결과:** 가짜 알람(False Positive) 대폭 감소 + 실제 위급 상황 감지 정확도 획기적 향상
+> **결과:** 가짜 알람(False Positive) 대폭 감소 + 실제 위급 상황 감지 정확도 획기적 향상
 
 ---
 
-### 2. 🔊 오디오 멀티모달 Late Fusion — YAMNet 비명/충격음 감지
+### 2. 오디오 멀티모달 Late Fusion — YAMNet 비명/충격음 감지
 
 ```
 비디오 프레임               오디오 청크 (0.975초)
@@ -129,11 +129,11 @@
 | **해결** | YAMNet(TF Hub)으로 프레임 동기화된 오디오 분석, DecisionNode에서 Late Fusion |
 | **효과** | 비명·충격음이 동반된 낙상에서 심각도 점수 상승 → 실제 위험 상황 감지 강화 |
 
-> 🎯 **결과:** 영상(눈) + 소리(귀) 멀티모달 교차 검증으로 오탐지율 감소 및 위급 상황 감지율 향상
+> **결과:** 영상(눈) + 소리(귀) 멀티모달 교차 검증으로 오탐지율 감소 및 위급 상황 감지율 향상
 
 ---
 
-### 3. 🧠 LLM Agent Mode — Ollama 기반 지능형 판단 (on/off 전환)
+### 3. LLM Agent Mode — Ollama 기반 지능형 판단 (on/off 전환)
 
 | 항목 | 내용 |
 |------|------|
@@ -159,11 +159,11 @@ curl -X POST http://localhost:8000/api/agent_toggle
 | 비용 | 없음 | 없음 (로컬 Ollama) |
 | LLM 실패 시 | — | 자동 룰 기반 폴백 |
 
-> 🎯 **설계 근거:** 낙상 감지는 골든타임이 생명이므로 **실시간 경로는 룰 기반(~0.001ms)으로 즉시 대응**하고, LLM은 비동기 후속 판단 또는 사후 정밀 분석 용도로 설계. "Agentic하게 만들 수 있느냐"와 "만들어야 하느냐"는 다른 문제 — **의도적으로 속도를 우선한 엔지니어링 판단**
+> **설계 근거:** 낙상 감지는 골든타임이 생명이므로 **실시간 경로는 룰 기반(~0.001ms)으로 즉시 대응**하고, LLM은 비동기 후속 판단 또는 사후 정밀 분석 용도로 설계. "Agentic하게 만들 수 있느냐"와 "만들어야 하느냐"는 다른 문제 — **의도적으로 속도를 우선한 엔지니어링 판단**
 
 ---
 
-### 4. 🎥 다중 카메라 동시 스트리밍 — FastAPI Async 아키텍처
+### 4. 다중 카메라 동시 스트리밍 — FastAPI Async 아키텍처
 
 ```python
 # YOLO 추론이 asyncio 이벤트 루프를 블로킹하지 않도록 처리
@@ -179,10 +179,10 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 
 ---
 
-### 5. 🤔 포즈 추정 휴리스틱 튜닝 — False Positive 제거
+### 5. 포즈 추정 휴리스틱 튜닝 — False Positive 제거
 
 <details>
-<summary><b>📐 낙상 판정 알고리즘 상세 (클릭하여 펼치기)</b></summary>
+<summary><b>낙상 판정 알고리즘 상세 (클릭하여 펼치기)</b></summary>
 
 ```
 공통적인 문제:
@@ -197,17 +197,17 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 
 </details>
 
-> 🎯 **결과:** 일상 동작과 실제 낙상의 완벽한 구분, 견고한 탐지 정확도 확보
+> **결과:** 일상 동작과 실제 낙상의 완벽한 구분, 견고한 탐지 정확도 확보
 
 ---
 
-### 6. 🖥️ 관제실 특화 대시보드 — Next.js + TailwindCSS
+### 6. 관제실 특화 대시보드 — Next.js + TailwindCSS
 
 **주요 UI 기능:**
-- 🔴 낙상 감지 즉시 **화면 전체 붉은색 맥박(Pulse) 점멸**
-- 🚨 **출동 요원 배치** 타이포그래피 오버레이 자동 출력
-- 📊 SQLite DB와 **2초 폴링**으로 실시간 통계 갱신
-- 🌑 사이버펑크 감성의 **다크 모드 전용 UI**
+- 낙상 감지 즉시 **화면 전체 붉은색 맥박(Pulse) 점멸**
+- **출동 요원 배치** 타이포그래피 오버레이 자동 출력
+- SQLite DB와 **2초 폴링**으로 실시간 통계 갱신
+- **다크 모드 전용 UI**
 
 ---
 
@@ -216,34 +216,34 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 ```
 낙상 감지 (HIGH Severity)
         │
-        ├── 📸 해당 프레임 캡처
-        ├── 📝 Florence-2 상황 분석 보고서 생성 (TXT)
-        └── 📧 Gmail SMTP → 담당자 스마트폰으로 즉시 전송
+        ├── 해당 프레임 캡처
+        ├── Florence-2 상황 분석 보고서 생성 (TXT)
+        └── Gmail SMTP → 담당자 스마트폰으로 즉시 전송
               └── 첨부: 낙상 스냅샷 + 분석 보고서
 ```
 
-> 🎯 **결과:** 보안 담당자가 자리를 비운 **최악의 시나리오에서도** 스마트폰으로 즉시 상황 파악 가능
+> **결과:** 보안 담당자가 자리를 비운 **최악의 시나리오에서도** 스마트폰으로 즉시 상황 파악 가능
 
 <div align="center">
   <table>
     <tr>
       <td align="center">
         <img src="figures/mail_list.PNG" alt="Email List" width="280" /><br/>
-        <sub><b>� 이메일함 — 다중 낙상 감지 알림</b><br/>발생할 때마다 자동으로 긴급 메일 수신</sub>
+        <sub><b>이메일함 — 다중 낙상 감지 알림</b><br/>발생할 때마다 자동으로 긴급 메일 수신</sub>
       </td>
       <td align="center">
         <img src="figures/mail_content.PNG" alt="Email Content" width="280" /><br/>
-        <sub><b>� 이메일 본문 — 현장 상황 요약</b><br/>Florence-2 VLM이 진단한 상황 분석 포함</sub>
+        <sub><b>이메일 본문 — 현장 상황 요약</b><br/>Florence-2 VLM이 진단한 상황 분석 포함</sub>
       </td>
     </tr>
     <tr>
       <td align="center">
         <img src="figures/snapshot.PNG" alt="Fall Snapshot" width="280" /><br/>
-        <sub><b>📸 낙상 감지 스냅샷</b><br/>낙상 발생 순간 자동 캡처된 현장 사진</sub>
+        <sub><b>낙상 감지 스냅샷</b><br/>낙상 발생 순간 자동 캡처된 현장 사진</sub>
       </td>
       <td align="center">
         <img src="figures/report.PNG" alt="Incident Report" width="280" /><br/>
-        <sub><b>📋 자동 생성 긴급 상황 보고서</b><br/>심각도·위치·권고 조치가 담긴 TXT 보고서</sub>
+        <sub><b>자동 생성 긴급 상황 보고서</b><br/>심각도·위치·권고 조치가 담긴 TXT 보고서</sub>
       </td>
     </tr>
   </table>
@@ -328,7 +328,7 @@ npm run dev
 
 ### ③ 접속
 
-브라우저에서 **[http://localhost:3000](http://localhost:3000)** 접속 → 다중 구역 낙상 관제 대시보드 확인 ✅
+브라우저에서 **[http://localhost:3000](http://localhost:3000)** 접속 → 다중 구역 낙상 관제 대시보드 확인
 
 ---
 
@@ -386,8 +386,8 @@ Agentic-fall-detection-system/
 │    YOLO 포즈      고정 점수     즉시 알림           LLM이 자율 판단      │
 │    각도/속도      계산만 수행   DB·이메일·Slack      도구 선택·루프·종료   │
 │                                                                         │
-│   ✅ 지연 없이 골든타임 확보          ✅ 오탐 분석, 이력 대조, 에스컬레이션 │
-│   ✅ LLM 장애와 무관하게 동작        ✅ 실시간 경로를 절대 블로킹하지 않음  │
+│   지연 없이 골든타임 확보          오탐 분석, 이력 대조, 에스컬레이션    │
+│   LLM 장애와 무관하게 동작        실시간 경로를 절대 블로킹하지 않음     │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -398,7 +398,26 @@ Agentic-fall-detection-system/
 |------|------|
 | **전부 Agent로 만들면?** | 매 프레임마다 LLM 호출 → 5~8초 지연 → 실시간 관제 불가. 골든타임 낭비 |
 | **전부 룰 기반이면?** | 맥락 이해 불가. "3층 복도에서 같은 환자가 30분 내 3번 넘어짐" 같은 패턴을 잡지 못함 |
-| **2-Track이면?** | 룰 기반이 **즉시 알림**(골든타임 확보) → Agent가 **후속 판단**(오탐 필터링, 에스컬레이션) |
+| **2-Track이면?** | 룰 기반이 **즉시 내부 알림**(골든타임 확보) → Agent가 **외부 신고 여부 판단**(오탐 필터링, 에스컬레이션) |
+
+### 대응 단계: 내부 알림 vs 외부 신고
+
+> **"일단 내부에 알리고, 외부 신고는 신중하게"**
+
+| 단계 | 경로 | 대상 | 내용 | 오탐 시 영향 |
+|------|------|------|------|------------|
+| **1차 — 내부 알림** | 실시간 (~0.001ms) | 관제 요원 (보안실) | DB 기록, 스냅샷, 이메일 | 낮음 — 내부 확인 후 무시 가능 |
+| **2차 — 외부 신고** | 비동기 Agent (최대 30s) | 119, 보호자, 간호사 | 에스컬레이션 | 높음 — **그래서 Agent가 판단** |
+
+```
+실시간 경로:  "넘어졌다!" → 보안실 내부 알림 (오탐이어도 괜찮음)
+                  ↓ dispatch
+비동기 Agent: "진짜 위험한가?" → 이력 조회 → 상황 분석
+              ├─ 위험함 → escalate_emergency (119 신고)
+              └─ 오탐임 → update_severity(HIGH → LOW), 신고 안 함
+```
+
+실시간 경로는 **내부 알림만** 담당하고, 되돌리기 어려운 **외부 신고(119)**는 Agent가 이력·맥락을 분석한 후에만 실행한다. 이것이 2-Track으로 나눈 실질적인 이유다.
 
 ### "Agentic하게 만들 수 있느냐"와 "만들어야 하느냐"는 다른 문제
 
@@ -408,7 +427,7 @@ Agentic-fall-detection-system/
 | **Agent로 만들어야 하는가?** | **아니오** — 속도가 생명 | **예** — 정밀 분석에 적합 |
 | **근거** | 0.001ms vs 5~8초 = **5,000,000배 차이** | 30초 내 완료, 실시간 경로와 독립 |
 
-> 💡 **도메인의 제약 조건(실시간성)에 맞는 설계가 좋은 설계다.** 모든 것을 Agent로 만드는 것이 목표가 아니라, **적재적소에 자율성을 배치**하는 것이 진짜 Agentic 설계다. 이 시스템은 "할 수 있지만 하지 않는다"는 **의도적 엔지니어링 판단**을 내렸다.
+> **도메인의 제약 조건(실시간성)에 맞는 설계가 좋은 설계다.** 모든 것을 Agent로 만드는 것이 목표가 아니라, **적재적소에 자율성을 배치**하는 것이 진짜 Agentic 설계다. 이 시스템은 "할 수 있지만 하지 않는다"는 **의도적 엔지니어링 판단**을 내렸다.
 
 ---
 
@@ -455,7 +474,7 @@ Perception → Audio → fall?             EscalationAgent (별도 스레드)
 
 <div align="center">
 
-**Made for safety monitoring 👀**
+**Made for safety monitoring**
 
 </div>
 

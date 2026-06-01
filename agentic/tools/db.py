@@ -10,6 +10,7 @@ def init_db(db_path: str = "incidents.db"):
         CREATE TABLE IF NOT EXISTS incidents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             incident_id TEXT UNIQUE,
+            camera_id TEXT DEFAULT '01',
             timestamp TEXT,
             severity TEXT,
             severity_score INTEGER,
@@ -21,6 +22,11 @@ def init_db(db_path: str = "incidents.db"):
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Migration: add camera_id column if table already existed without it
+    cursor = conn.execute("PRAGMA table_info(incidents)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "camera_id" not in columns:
+        conn.execute("ALTER TABLE incidents ADD COLUMN camera_id TEXT DEFAULT '01'")
     conn.commit()
     conn.close()
 
@@ -33,6 +39,7 @@ def log_to_db(
     audio_scream_detected: bool = False,
     audio_impact_detected: bool = False,
     audio_confidence: float = 0.0,
+    camera_id: str = "01",
 ) -> str:
     """이벤트를 DB에 저장하고 incident_id 반환"""
     now = datetime.now()
@@ -41,10 +48,11 @@ def log_to_db(
 
     conn = sqlite3.connect(db_path)
     conn.execute("""
-        INSERT INTO incidents (incident_id, timestamp, severity, severity_score, scene_description, actions_taken, audio_scream_detected, audio_impact_detected, audio_confidence)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO incidents (incident_id, camera_id, timestamp, severity, severity_score, scene_description, actions_taken, audio_scream_detected, audio_impact_detected, audio_confidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         incident_id,
+        camera_id,
         now.isoformat(),
         severity,
         severity_score,
