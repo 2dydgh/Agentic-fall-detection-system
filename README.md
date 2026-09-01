@@ -273,6 +273,7 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 | 분류 | 기술 |
 |------|------|
 | **AI / Agent** | LangGraph, YOLO11n-pose (Ultralytics), Florence-2 (Microsoft), YAMNet (Google), Ollama (LLM Agent), PyTorch (Attention Fusion) |
+| **온톨로지 / 기호 추론** | SWI-Prolog 9.0 (규칙 추론 엔진), pyswip (Python 바인딩), RDF/OWL + rdflib (개념 계층 정본), Turtle (`.ttl`) |
 | **Backend** | Python 3.10+, FastAPI, Uvicorn, SQLite |
 | **Frontend** | Next.js (React), TailwindCSS, Lucide Icons |
 | **알림** | Gmail SMTP, Slack Webhook (선택) |
@@ -366,6 +367,7 @@ Agentic-fall-detection-system/
 │   │   ├── analysis.py       # Florence-2 VLM 분석 노드
 │   │   ├── decision.py       # 심각도 판단 (Attention Fusion / 룰 기반 자동 선택)
 │   │   ├── decision_llm.py   # LLM Agent 심각도 판단 (Ollama)
+│   │   ├── decision_ontology.py # 온톨로지+Prolog 규칙 판단 (발동 규칙 반환)
 │   │   └── action.py         # 이메일/DB/Slack 액션 노드
 │   ├── audio/
 │   │   ├── extractor.py      # 프레임 동기화 오디오 청크 추출
@@ -379,7 +381,18 @@ Agentic-fall-detection-system/
 │   │   ├── model.py          # Multi-Head Self-Attention Fusion Model
 │   │   ├── dataset.py        # 시나리오 기반 학습 데이터 생성
 │   │   └── train.py          # 학습/평가/비교 실험 스크립트
+│   ├── ontology/             # 온톨로지 기반 설명가능 판정 (섹션 9)
+│   │   ├── ontology.ttl      # RDF/OWL 정본 — 개념 38개 + 관계 9개
+│   │   ├── schema.py         # ttl → Prolog is_a/2 변환 + 순환 검증
+│   │   ├── generated/        #   └ ontology_facts.pl (schema.py 생성물)
+│   │   ├── facts.py          # AgentState → Prolog 사실 (순수 함수)
+│   │   ├── history.py        # 사건 이력 → prior_incident/3 시간축 사실
+│   │   ├── rules.pl          # 판정 규칙 16개 + 파생 술어 (이행 폐쇄)
+│   │   ├── engine.py         # pyswip 엔진 · 전역 Lock · 판정마다 사실 격리
+│   │   └── visualize.py      # ttl → Mermaid 다이어그램
 │   └── tools/                # 보조 도구 모음
+├── scripts/
+│   └── compare_modes.py      # 4개 판정 모드 비교 실험 → 비교표 생성
 ├── api/
 │   └── main.py               # FastAPI 라우터 & MJPEG 스트리밍
 ├── frontend/
@@ -607,6 +620,61 @@ scripts/compare_modes.py             # 4개 모드 비교 → 아래 표 생성
 몇 초 전의 자기 자신을 재낙상 근거로 삼아 스스로를 HIGH로 올린다. 값은
 `rules.pl`의 `repeat_fall_min_minutes/1`에 있고, 근거와 대가(5분 내 실제 2차
 낙상은 시간축 가중치를 못 받는다)를 같은 파일 주석에 적어 두었다.
+
+#### Prolog 연동에서 부딪힌 것
+
+**① 개념 계층 추론은 두 줄이다**
+
+```prolog
+kind_of(X, Y) :- is_a(X, Y).
+kind_of(X, Y) :- is_a(X, Z), kind_of(Z, Y).
+```
+
+이 재귀가 `bathroom → wet_area → high_risk_zone`을 자동으로 잇는다. 규칙은
+상위 개념(`high_risk_zone`, `vulnerable_person`)만 참조하므로, `Balcony` 같은
+구체 개념을 추가해도 `ontology.ttl`에 한 줄이면 되고 `rules.pl`은 손대지 않는다.
+
+**② SWI-Prolog 엔진은 프로세스당 하나여서 멀티스레드에서 깨진다**
+
+`api/main.py`는 `VideoStream`마다 추론 스레드를 띄우므로 카메라 4대면 판정
+노드가 동시 호출된다. 실측 결과는 이렇다.
+
+| | 질의 지연 | 스레드 4개 × 50회 |
+|---|---|---|
+| pyswip 단독 | 0.021 ms | **200회 중 50회만 성공** (`NestedQueryError`) |
+| pyswip + 전역 Lock | 0.021 ms | 200 / 200 성공 |
+| subprocess | 6.29 ms | 안전하지만 300배 느림 |
+
+`pyswip`의 `Prolog`는 이 버전에서 클래스 레벨 API(`_queryIsOpen`이 클래스 속성)라
+인스턴스별 락으로는 부족하다. 모듈 전역 Lock으로 모든 질의를 직렬화했고,
+오버헤드는 측정되지 않는 수준이다. SWI 공식 인터페이스인 `janus`는 설치된
+9.0.4에 포함돼 있지 않아 제외했다.
+
+**③ 엔진이 장기 실행되므로 판정 간 사실이 샌다**
+
+이전 사건의 사실이 남으면 다음 판정이 오염된다. `judge()`가 매 호출마다
+동적 술어 7종을 `retractall`로 비우고 새로 주입한다.
+
+```python
+with _QUERY_LOCK:
+    self._retract_all()        # 이전 사건 흔적 제거
+    for fact in facts:
+        self._pl.assertz(fact)
+    ...
+```
+
+이로써 판정이 **입력 사실만의 함수**가 된다. 이 불변식은 테스트로 고정돼 있어,
+`_retract_all`을 제거하면 즉시 깨진다.
+
+**④ 발동 규칙 회수**
+
+```prolog
+fired(I, R, Sev) :- rule(R, Sev, I).
+```
+
+`fired(current, R, Sev), rule_text(R, D)` 한 번의 질의로 발동한 규칙 ID와
+한국어 설명을 함께 받는다. 이것이 아래 "발동 규칙" 목록의 출처이며,
+`severity/2`는 컷(`!`)으로 HIGH → MEDIUM → LOW 우선순위를 해소한다.
 
 #### 개념 계층
 
