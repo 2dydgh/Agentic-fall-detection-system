@@ -55,7 +55,13 @@ build/
 data/
 
 # Docs (plans, internal notes)
-docs/
+# 공개 문서(ARCHITECTURE/ONTOLOGY/DEVELOPMENT)만 추적하고 나머지는 제외한다.
+# 디렉터리 자체를 제외하면 git 이 안으로 들어가지 않아 예외가 먹지 않으므로
+# docs/ 가 아니라 docs/* 로 적는다.
+docs/*
+!docs/*.md
+docs/comparison_results.md
+docs/superpowers/
 
 # Claude Code
 CLAUDE.md
