@@ -1,5 +1,5 @@
 import random
-from agentic.nodes.decision import decision_node
+from agentic.nodes.decision import decision_node_rule as decision_node
 
 
 class TestDecisionFusion:

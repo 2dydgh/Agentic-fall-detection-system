@@ -1,8 +1,68 @@
 import random
+import os
 
-def decision_node(state: dict) -> dict:
+# Attention Fusion Model (lazy-loaded singleton)
+_fusion_model = None
+_fusion_checked = False
+
+
+def _get_fusion_model():
+    """학습된 Attention Fusion Model 로드 (없으면 None)"""
+    global _fusion_model, _fusion_checked
+    if not _fusion_checked:
+        _fusion_checked = True
+        model_path = os.path.join(os.path.dirname(__file__), "../../models/fusion_model.pt")
+        if os.path.exists(model_path):
+            from agentic.fusion.model import load_fusion_model
+            _fusion_model = load_fusion_model(model_path)
+            if _fusion_model:
+                print("[Decision] Attention Fusion Model loaded")
+    return _fusion_model
+
+
+def decision_node_attention(state: dict) -> dict:
+    """Attention-based Multimodal Fusion으로 severity 판정"""
+    from agentic.fusion.feature import extract_features
+
+    model = _get_fusion_model()
+    if model is None:
+        print("[Decision] Fusion model not found, falling back to rule-based")
+        return decision_node_rule(state)
+
+    features = extract_features(state)
+    result = model.predict(features)
+
+    severity = result["severity"]
+    total_score = result["severity_score"]
+
+    # Attention weight 로깅
+    attn = result["attn_weights"]
+    modalities = ["Pose", "Audio", "VLM"]
+    importance = attn.mean(axis=0)
+    top_mod = modalities[importance.argmax()]
+    print(f"[Decision] Attention Fusion: score={total_score}, severity={severity}, "
+          f"top_modality={top_mod} ({importance.max():.3f})")
+
+    # 권장 액션
+    actions = ["log_to_db"]
+    if severity in ["MEDIUM", "HIGH"]:
+        actions.append("save_snapshot")
+        actions.append("notify_security_room")
+    if severity == "HIGH":
+        actions.append("send_email_alert")
+        actions.append("generate_report")
+
+    return {
+        "severity": severity,
+        "severity_score": total_score,
+        "recommended_actions": actions,
+        "auto_action_required": severity == "HIGH",
+    }
+
+
+def decision_node_rule(state: dict) -> dict:
     """
-    심각도 점수 계산 및 대응 방식 결정
+    Rule-based 심각도 점수 계산 및 대응 방식 결정
 
     점수 계산:
     - base: 기본 40점 + 각도/속도 추가 점수 + 랜덤 노이즈
@@ -27,7 +87,7 @@ def decision_node(state: dict) -> dict:
     # 기본 점수: 각도가 심할수록, 쓰러지는 속도가 빠를수록 증가 (최소 40 ~ 75)
     angle_bonus = min((angle - 35) * 0.6, 20) if angle > 35 else 0
     vel_bonus = min(velocity * 0.5, 15)
-    
+
     base_score = 40 + angle_bonus + vel_bonus + random.randint(-5, 5)
 
     age_bonus = 15 if age == "elderly" else 0
@@ -57,7 +117,7 @@ def decision_node(state: dict) -> dict:
         actions.append("save_snapshot")
         actions.append("notify_security_room")
     if severity == "HIGH":
-        actions.append("send_email_alert")  # Changed from send_slack_alert
+        actions.append("send_email_alert")
         actions.append("generate_report")
 
     return {
@@ -66,3 +126,13 @@ def decision_node(state: dict) -> dict:
         "recommended_actions": actions,
         "auto_action_required": severity == "HIGH",
     }
+
+
+def decision_node(state: dict) -> dict:
+    """
+    Fusion model이 있으면 Attention-based, 없으면 Rule-based 사용.
+    """
+    model = _get_fusion_model()
+    if model is not None:
+        return decision_node_attention(state)
+    return decision_node_rule(state)

@@ -108,28 +108,45 @@
 
 ---
 
-### 2. 오디오 멀티모달 Late Fusion — YAMNet 비명/충격음 감지
+### 2. Attention-based Multimodal Fusion — 동적 모달리티 가중치 학습
 
 ```
-비디오 프레임               오디오 청크 (0.975초)
-    │                           │
-    ▼                           ▼
- YOLO11n-pose               YAMNet (521클래스)
- (각도/속도)                (비명/충격음)
-    │                           │
-    └───────────┬───────────────┘
-                ▼
-         DecisionNode (Late Fusion)
-         비명: +15점 / 충격음: +10점
+비디오 프레임               오디오 청크 (0.975초)         장면 이미지
+    │                           │                          │
+    ▼                           ▼                          ▼
+ YOLO11n-pose               YAMNet (521클래스)         Florence-2 VLM
+ (각도/속도/부동시간)       (비명/충격음/신뢰도)       (나이/장소/위험요소)
+    │                           │                          │
+    ▼                           ▼                          ▼
+ Pose Feature (6d)         Audio Feature (6d)         VLM Feature (6d)
+    │                           │                          │
+    └───────────────────────────┼──────────────────────────┘
+                                ▼
+                   Multi-Head Self-Attention (4 heads)
+                   + Modality Embedding + LayerNorm
+                                │
+                                ▼
+                    ┌───────────┴───────────┐
+                    ▼                       ▼
+              Score Head               Class Head
+           (severity 0~100)        (LOW/MEDIUM/HIGH)
 ```
 
 | 항목 | 내용 |
 |------|------|
-| **문제** | 비전만으로는 사각지대·가려진 낙상을 놓침 |
-| **해결** | YAMNet(TF Hub)으로 프레임 동기화된 오디오 분석, DecisionNode에서 Late Fusion |
-| **효과** | 비명·충격음이 동반된 낙상에서 심각도 점수 상승 → 실제 위험 상황 감지 강화 |
+| **문제** | 기존 Rule-based Late Fusion은 고정 가중치(`비명 +15점`, `충격음 +10점`) → 모달리티 간 상호작용 무시 |
+| **해결** | PyTorch Multi-Head Self-Attention으로 3개 모달리티(Pose, Audio, VLM) 간 동적 가중치 학습 |
+| **학습 방식** | 도메인 지식 기반 9개 시나리오에서 10,000개 학습 데이터 생성, 모달리티 간 상호작용(비명+큰 각도, 고령자+위험 장소 등) 반영 |
+| **효과** | Validation Accuracy 91.0%, Score MAE 6.85점 달성. 상황에 따라 Pose/Audio/VLM 가중치가 동적으로 변화 |
 
-> **결과:** 영상(눈) + 소리(귀) 멀티모달 교차 검증으로 오탐지율 감소 및 위급 상황 감지율 향상
+**Attention Weight 분석 — 모달리티별 중요도:**
+```
+Pose:  0.6122 ##############################
+Audio: 0.2152 ##########
+VLM:   0.1726 ########
+```
+
+> **결과:** Rule-based 고정 가중치 → Attention 동적 가중치 전환으로, 비명+급격한 낙상은 Audio 가중치 상승, 고령자+위험 장소는 VLM 가중치 상승 — **상황별 최적 모달리티 조합을 자동으로 학습**
 
 ---
 
@@ -255,7 +272,7 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 
 | 분류 | 기술 |
 |------|------|
-| **AI / Agent** | LangGraph, YOLO11n-pose (Ultralytics), Florence-2 (Microsoft), YAMNet (Google), Ollama (LLM Agent) |
+| **AI / Agent** | LangGraph, YOLO11n-pose (Ultralytics), Florence-2 (Microsoft), YAMNet (Google), Ollama (LLM Agent), PyTorch (Attention Fusion) |
 | **Backend** | Python 3.10+, FastAPI, Uvicorn, SQLite |
 | **Frontend** | Next.js (React), TailwindCSS, Lucide Icons |
 | **알림** | Gmail SMTP, Slack Webhook (선택) |
@@ -343,7 +360,7 @@ Agentic-fall-detection-system/
 │   │   ├── perception.py     # YOLO11n 포즈 추정 노드
 │   │   ├── audio.py          # YAMNet 오디오 분류 노드
 │   │   ├── analysis.py       # Florence-2 VLM 분석 노드
-│   │   ├── decision.py       # 룰 기반 심각도 판단
+│   │   ├── decision.py       # 심각도 판단 (Attention Fusion / 룰 기반 자동 선택)
 │   │   ├── decision_llm.py   # LLM Agent 심각도 판단 (Ollama)
 │   │   └── action.py         # 이메일/DB/Slack 액션 노드
 │   ├── audio/
@@ -353,6 +370,11 @@ Agentic-fall-detection-system/
 │   │   ├── tools.py          # Agent 도구 정의 (4종)
 │   │   ├── escalation_agent.py # ReAct 루프 에스컬레이션 Agent
 │   │   └── runner.py         # 비동기(스레드) Agent 실행기
+│   ├── fusion/
+│   │   ├── feature.py        # 모달리티별 Feature 추출 (Pose/Audio/VLM → 6-dim)
+│   │   ├── model.py          # Multi-Head Self-Attention Fusion Model
+│   │   ├── dataset.py        # 시나리오 기반 학습 데이터 생성
+│   │   └── train.py          # 학습/평가/비교 실험 스크립트
 │   └── tools/                # 보조 도구 모음
 ├── api/
 │   └── main.py               # FastAPI 라우터 & MJPEG 스트리밍
@@ -407,6 +429,19 @@ Agentic-fall-detection-system/
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### System 1 / System 2 — 인지과학에서 빌려온 설계 철학
+
+Daniel Kahneman의 *Thinking, Fast and Slow*에서 영감을 받은 구조다.
+
+| | System 1 (실시간 경로) | System 2 (비동기 Agent) |
+|--|----------------------|----------------------|
+| **특성** | 빠르고 직관적, 자동적 | 느리지만 숙고적, 분석적 |
+| **이 시스템에서** | "각도 꺾임 + 쾅 소리 = 50점, 알람!" | "잠깐, 이 환자 어제도 넘어졌잖아. 50점이 아니라 85점이야" |
+| **판단 방식** | 고정된 룰 (점수 공식) | LLM이 이력·맥락을 종합 추론 |
+| **교정** | 불가 — 한 번 판단하면 끝 | 가능 — `update_severity`로 System 1의 판단을 사후 교정 |
+
+> **System 2가 System 1을 교정할 수 있다** — 이것이 2-Track의 핵심 가치다. 실시간 경로가 과소/과대 판단한 심각도를 비동기 Agent가 이력 조회와 VLM 재분석을 거쳐 덮어쓴다. 반대로 오탐(HIGH → LOW)도 가능하다.
 
 ### 왜 이렇게 나눴는가?
 
@@ -482,8 +517,8 @@ Perception → Audio → fall?             EscalationAgent (별도 스레드)
 - **발전 계획:** 과거 낙상 이력을 바탕으로 구역별 오탐/미탐 패턴을 학습하여 판단 기준을 자동 조정. (예: "3층 복도는 오탐이 잦으니 임계치 상향", "7층 병실은 놓친 사례가 있으니 민감도 상향")
 
 ### 웨어러블 센서 연동 (Wearable Sensor Integration)
-- **현재 상태:** 비전(YOLO11n) + 오디오(YAMNet) 멀티모달 Late Fusion 구현 완료
-- **발전 계획:** **`WearableNode`(스마트워치 자이로스코프 이상 수치 연동)** 를 파이프라인에 추가. 영상·소리·생체 신호 3종 멀티모달 교차 검증
+- **현재 상태:** 비전(YOLO11n) + 오디오(YAMNet) + VLM(Florence-2)의 Attention-based Multimodal Fusion 구현 완료
+- **발전 계획:** **`WearableNode`(스마트워치 자이로스코프 이상 수치 연동)** 를 파이프라인에 추가. 영상·소리·생체 신호 4종 멀티모달 교차 검증, Attention Fusion에 4번째 모달리티로 자연스럽게 확장 가능
 
 ---
 
