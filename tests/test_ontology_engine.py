@@ -311,14 +311,17 @@ class TestTemporalRules:
         assert j.severity == "HIGH"
         assert "r6" in [r.rule_id for r in j.fired_rules]
 
-    def test_recent_incident_does_not_satisfy_the_thirty_minute_floor(self):
-        """5분 전 이력은 '같은 낙상의 재검출' 이므로 시간축 규칙이 발동하면 안 된다."""
-        facts = [
+    def test_seconds_old_incident_does_not_satisfy_the_floor(self):
+        """직전 사건(0분 전)은 '같은 낙상의 재검출' 이므로 발동하면 안 된다.
+
+        하한이 없으면 사건 1건이 자기 자신을 재낙상 근거로 삼아 스스로를
+        HIGH 로 승격시킨다. 이 테스트가 그 자기증폭을 막는다.
+        """
+        j = self.engine.judge([
             "occurred_in(current, hallway)",
             "no_movement_duration(current, 12)",
-            "prior_incident('INC-A', '01', 5)",
-        ]
-        j = self.engine.judge(facts)
+            "prior_incident('INC-A', '01', 0)",
+        ])
         ids = [r.rule_id for r in j.fired_rules]
         assert "r6" not in ids and "r13" not in ids
 
@@ -333,22 +336,31 @@ class TestTemporalRules:
         assert "r6" in ids and "r13" in ids
         assert j.severity == "HIGH"
 
-    def test_floor_boundary_is_inclusive_at_thirty_minutes(self):
+    def test_floor_boundary_is_inclusive_at_five_minutes(self):
+        """하한은 repeat_fall_min_minutes/1 이 정하며 경계는 포함이다."""
         j = self.engine.judge([
             "occurred_in(current, hallway)",
             "no_movement_duration(current, 2)",
-            "prior_incident('INC-A', '01', 30)",
+            "prior_incident('INC-A', '01', 5)",
         ])
         assert "r13" in [r.rule_id for r in j.fired_rules]
 
-    def test_floor_boundary_excludes_twenty_nine_minutes(self):
+    def test_floor_boundary_excludes_four_minutes(self):
         j = self.engine.judge([
             "occurred_in(current, hallway)",
             "no_movement_duration(current, 2)",
-            "prior_incident('INC-A', '01', 29)",
+            "prior_incident('INC-A', '01', 4)",
         ])
         assert j.severity == "LOW"
         assert j.fired_rules == []
+
+    def test_floor_is_read_from_the_named_constant(self):
+        """하한이 규칙에 박힌 리터럴이 아니라 명명 상수에서 온다.
+
+        값을 조정할 때 고칠 곳이 한 군데임을 보장한다.
+        """
+        rows = list(self.engine._pl.query("repeat_fall_min_minutes(M)"))
+        assert rows and int(rows[0]["M"]) == 5
 
     def test_without_history_same_facts_stay_low(self):
         """이력이 없으면 동일 상황이 LOW 다. 이 대비가 시간축 추론의 증거다."""

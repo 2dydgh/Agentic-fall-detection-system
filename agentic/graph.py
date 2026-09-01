@@ -79,6 +79,12 @@ def create_fall_detection_graph(
         mode = state.get("decision_mode")
         if mode is None:  # 하위 호환: 기존 use_llm_decision 플래그
             mode = "llm" if state.get("use_llm_decision") else "auto"
+        # decision_node_ontology 는 엔진 실패를 알리려고 결과에
+        # decision_mode="ontology_fallback" 을 실어 보낸다. 그 값이 state 에
+        # 남아 다음 프레임 라우팅에 쓰이면, 일시적 실패 한 번이 나머지 실행
+        # 전체를 조용히 auto 로 바꿔 버린다. 라우팅에서는 ontology 로 되돌린다.
+        if mode == "ontology_fallback":
+            mode = "ontology"
 
         if mode == "ontology":
             from .nodes.decision_ontology import decision_node_ontology
