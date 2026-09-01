@@ -516,6 +516,98 @@ Perception → Audio → fall?             EscalationAgent (별도 스레드)
 온톨로지 모드는 RDF/OWL 개념 계층과 Prolog 규칙 16개로 판정하고,
 발동한 규칙을 근거로 함께 반환한다.
 
+#### 착수 계기 — 기존 판정 로직에서 확인한 결함 3가지
+
+이 작업은 새 기능을 얹으려고 시작한 것이 아니라, 기존 판정 경로를 실행해
+보다가 발견한 문제에서 출발했다. 셋 다 현재 코드에 그대로 남아 있다
+(`decision.py`는 비교 대조군이므로 의도적으로 고치지 않았다).
+
+**① 판정에 난수가 섞여 있다** — `decision.py:91`
+
+```python
+base_score = 40 + angle_bonus + vel_bonus + random.randint(-5, 5)
+```
+
+임계값 부근에서 동일 입력의 판정이 갈린다. 아래 비교표 S6·S7의 `rule` 열이
+그 결과다. MEDIUM은 `save_snapshot` + `notify_security_room`을 유발하므로,
+같은 상황에서 경비실 통보 여부가 실행마다 달라진다.
+
+**② 무동작 지속 시간이 계산에 쓰이지 않는다** — `decision.py:78`
+
+`no_movement_seconds`를 읽지만 이후 점수식에 등장하지 않는다. 함수 전체에서
+할당문 1회만 나타난다. 그 결과 아래 표의 S1(8초)과 S5(300초)가 같은 판정을
+받는다. 낙상 감지에서 가장 중요한 변수가 무시되고 있었다.
+
+**③ LLM 경로가 폴백만 타고 있었다** — `decision_llm.py:53`
+
+`OLLAMA_MODEL`이 설치되지 않은 `llama3.2`를 가리켜, 호출 시 예외가 나고
+`except`가 조용히 룰 기반으로 되돌렸다. 실제로는 LLM이 한 번도 돌지 않은
+상태였다. `qwen2.5:7b`로 교체해 살린 뒤 측정한 결과가 아래 표의 `llm` 열이다.
+
+이 셋은 모두 **"판정 근거를 추적할 수 없다"**는 하나의 문제로 모인다.
+점수만 반환하는 구조에서는 잘못된 값이 나와도 어디서 비롯됐는지 알 수 없다.
+그래서 판정을 점수 계산이 아니라 규칙 추론으로 재구성했다.
+
+#### 구성
+
+```
+agentic/ontology/
+    ontology.ttl              # RDF/OWL 정본 — 개념 38개 + 관계 9개
+    schema.py                 # ttl → Prolog is_a/2 변환, 순환 검증
+    generated/
+        ontology_facts.pl     # schema.py 생성물 (커밋 대상)
+    facts.py                  # AgentState → Prolog 사실 (순수 함수, 난수 없음)
+    history.py                # incidents DB → prior_incident/3 시간축 사실
+    rules.pl                  # 판정 규칙 16개 + 파생 술어
+    engine.py                 # pyswip 엔진, 전역 Lock, 판정마다 사실 격리
+    visualize.py              # ttl → Mermaid 다이어그램
+
+agentic/nodes/decision_ontology.py   # 4번째 판정 모드
+scripts/compare_modes.py             # 4개 모드 비교 → 아래 표 생성
+```
+
+설계상 지킨 원칙은 네 가지다.
+
+| 원칙 | 구현 |
+|---|---|
+| 계층은 한 곳에만 기록 | `ontology.ttl`이 정본, `is_a/2`는 생성물. `rules.pl`에 계층 사실 0건 |
+| 판정에 난수 없음 | `facts.py`는 순수 함수, 동일 입력 → 동일 사실 목록 |
+| 판정 간 상태 누출 없음 | `engine.judge()`가 매 판정마다 동적 술어를 `retractall` |
+| 점수를 새로 만들지 않음 | `severity_score`는 고정 매핑(LOW 25 / MEDIUM 60 / HIGH 90), 판정에 미관여 |
+
+#### 판정 규칙 16개
+
+규칙은 상위 개념만 참조한다. 그래서 `Balcony` 같은 구체 개념을 추가해도
+`ontology.ttl`에 한 줄 넣으면 규칙 수정 없이 곧바로 적용된다.
+
+| | 조건 | 판정 |
+|---|---|---|
+| r1 | 고위험 구역 + 무동작 ≥ 30초 | HIGH |
+| r2 | 취약 계층(노인·아동) + 비명 | HIGH |
+| r3 | 무동작 ≥ 60초 | HIGH |
+| r4 | 붕괴 자세 + 충격음 + 무동작 ≥ 20초 | HIGH |
+| r5 | 취약 계층 + 고위험 구역 + 무동작 ≥ 15초 | HIGH |
+| r6 | 동일 구역 재낙상(5분~3일) + 무동작 ≥ 10초 | HIGH |
+| r7 | 고위험 구역 + 무동작 10~30초 | MEDIUM |
+| r8 | 비명 감지 | MEDIUM |
+| r9 | 취약 계층 + 무동작 ≥ 15초 | MEDIUM |
+| r10 | 붕괴 자세 + 무동작 ≥ 10초 | MEDIUM |
+| r11 | 충격음 + 붕괴 자세 | MEDIUM |
+| r12 | 주변 위험물 + 붕괴 자세 | MEDIUM |
+| r13 | 동일 구역 재낙상(5분~3일) | MEDIUM |
+| r14~16 | 심각도 → 대응 액션 매핑 | — |
+
+발동한 규칙이 하나도 없으면 LOW다. `r6`·`r13`은 **기존 세 경로가 구조적으로
+수행할 수 없는 판정**이다. 프레임 하나만 보고 판단하는 구조에는 이력이라는
+개념 자체가 없다.
+
+`r6`·`r13`의 5분 하한은 자기증폭을 막기 위한 것이다. `ActionNode`가 LOW를
+포함한 모든 판정을 DB에 기록하고 `PerceptionNode`가 같은 낙상의 재검출을
+허용하므로(`COOLDOWN_FRAMES=60`, 30fps 기준 약 2초), 하한이 없으면 사건 1건이
+몇 초 전의 자기 자신을 재낙상 근거로 삼아 스스로를 HIGH로 올린다. 값은
+`rules.pl`의 `repeat_fall_min_minutes/1`에 있고, 근거와 대가(5분 내 실제 2차
+낙상은 시간축 가중치를 못 받는다)를 같은 파일 주석에 적어 두었다.
+
 #### 개념 계층
 
 ```mermaid
