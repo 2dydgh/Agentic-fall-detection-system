@@ -76,10 +76,20 @@ def create_fall_detection_graph(
         return {**state, **result}
 
     def decision_node_wrapper(state: AgentState) -> AgentState:
-        if state.get("use_llm_decision"):
+        mode = state.get("decision_mode")
+        if mode is None:  # 하위 호환: 기존 use_llm_decision 플래그
+            mode = "llm" if state.get("use_llm_decision") else "auto"
+
+        if mode == "ontology":
+            from .nodes.decision_ontology import decision_node_ontology
+            result = decision_node_ontology(state)
+        elif mode == "llm":
             from .nodes.decision_llm import decision_node_llm
             result = decision_node_llm(state)
-        else:
+        elif mode == "rule":
+            from .nodes.decision import decision_node_rule
+            result = decision_node_rule(state)
+        else:  # auto — 기존 동작 유지 (fusion 모델 있으면 attention)
             result = decision_node(state)
         return {**state, **result}
 

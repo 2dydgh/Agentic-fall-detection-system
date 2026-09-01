@@ -50,7 +50,7 @@ Respond with ONLY valid JSON, no markdown or explanation:
 {{"severity": "LOW|MEDIUM|HIGH", "severity_score": 0-100, "recommended_actions": ["action1", ...], "reasoning": "brief explanation"}}"""
 
 
-OLLAMA_MODEL = "llama3.2"
+OLLAMA_MODEL = "qwen2.5:7b"
 VALID_ACTIONS = {"log_to_db", "save_snapshot", "notify_security_room", "send_email_alert", "generate_report"}
 
 

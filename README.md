@@ -327,6 +327,10 @@ ollama pull llama3.2
 python3 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
+# 시스템 패키지 설치 (온톨로지 모드에 필요)
+# 없어도 나머지는 동작하지만, 온톨로지 모드가 조용히 룰 기반으로 폴백한다
+sudo apt-get install -y swi-prolog-nox
+
 # 의존성 설치
 pip install -r requirements.txt
 
@@ -503,6 +507,135 @@ Perception → Audio → fall?             EscalationAgent (별도 스레드)
 | **안전장치** | max_iterations=4, timeout=30s 이중 제한 + LLM 실패 시 룰 기반 폴백 |
 
 > 이 비동기 경로가 **Tool Calling + ReAct 루프 + 자율 판단을 갖춘 진짜 AI Agent**. 실시간 경로는 속도, 비동기 경로는 지능 — 2-Track Architecture의 핵심.
+
+---
+
+### 9. 🕸️ 온톨로지 기반 설명가능 판정 (Ontology Mode)
+
+기존 판정은 0~100 점수만 반환해 "왜 그 판정인가"에 답하지 못했다.
+온톨로지 모드는 RDF/OWL 개념 계층과 Prolog 규칙 16개로 판정하고,
+발동한 규칙을 근거로 함께 반환한다.
+
+#### 개념 계층
+
+```mermaid
+flowchart TD
+    person --> adult
+    response_action --> alert_action
+    high_risk_zone --> balcony
+    wet_area --> bathroom
+    normal_zone --> bedroom
+    vulnerable_person --> child
+    posture --> collapsed
+    audio_event --> distress_sound
+    vulnerable_person --> elderly
+    response_action --> emergency_action
+    normal_zone --> hallway
+    severity --> high
+    zone --> high_risk_zone
+    audio_event --> impact_sound
+    wet_area --> kitchen
+    posture --> leaning
+    normal_zone --> living_room
+    response_action --> log_action
+    severity --> low
+    severity --> medium
+    zone --> normal_zone
+    unclassified_zone --> other_zone
+    unclassified_zone --> outdoor
+    distress_sound --> scream
+    high_risk_zone --> stairs
+    zone --> unclassified_zone
+    person --> unknown_person
+    posture --> upright
+    person --> vulnerable_person
+    high_risk_zone --> wet_area
+```
+
+#### 판정 방식 비교
+
+| | rule | attention | llm | ontology |
+|---|---|---|---|---|
+| 재현성 | 난수로 흔들림 | 있음 | 없음 | 있음 (조건부) |
+| 무동작 시간 반영 | 없음 | 있음 | 있음 | 있음 |
+| 취약 계층 구분 | 노인만 | 노인만 | 프롬프트 의존 | 노인 + 아동 |
+| 시간축(재낙상) 판정 | 불가 | 불가 | 불가 | 가능 |
+| 판단 근거 | 없음 | 모달리티 가중치 | 자연어 | 발동 규칙 ID |
+| 새 구역 추가 | 코드 수정 | 재학습 | 프롬프트 수정 | `is_a` 한 줄 |
+
+> `ontology` 열의 재현성은 조건부입니다. 판정은 입력 사실**과** 저장된 사건 이력 양쪽의
+> 함수이므로, 같은 입력이라도 DB 이력이 다르면 판정이 달라질 수 있습니다(아래 S8이 그 예입니다).
+> 또한 Prolog 엔진 적재에 실패하면 `ontology_fallback` 경로가 `decision_node_rule`을 재사용하므로
+> 그 경우에는 `rule` 열과 같은 난수 지터가 그대로 나타납니다.
+
+> `attention` 모드는 사람이 직접 라벨링한 데이터가 아니라 `agentic/fusion/dataset.py`의
+> 규칙 기반 합성 데이터로 학습됐다. 따라서 이 표에서 `attention` 열을 정답(ground truth)
+> 취급해서는 안 되며, 다른 모드와 동일하게 하나의 판정 방식으로 비교 대상일 뿐이다.
+
+> 아래 표는 `python -m scripts.compare_modes` 가 임시 DB 를 직접 만들어 S8 용 이력 1건
+> (카메라 99, 24시간 전)만 주입한 상태에서 생성했습니다. 프로젝트 루트의 `incidents.db` 는
+> 읽지도 쓰지도 않으므로, 같은 코드로 재실행하면 ontology 열은 같은 값이 나옵니다.
+
+> LLM 열은 호출 비용이 커서 3회만 반복했습니다. 다른 열(30회)과 반복 횟수가 다르므로 동일한 표본 수로 비교하지 마십시오.
+
+| 시나리오 | 상황 | rule | attention | llm | ontology |
+|---|---|---|---|---|---|
+| S1 | 거실, 8초, 성인 | MEDIUM | HIGH | MEDIUM | LOW (점수 없음) |
+| S2 | 화장실, 45초, 노인 | HIGH | HIGH | MEDIUM | HIGH (점수 없음) |
+| S3 | 복도, 12초, 성인, 비명 | HIGH | HIGH | MEDIUM | MEDIUM (점수 없음) |
+| S4 | 계단, 35초, 성인 | **HIGH/MEDIUM** (비결정적) | HIGH | MEDIUM | HIGH (점수 없음) |
+| S5 | 거실, 300초, 성인 | MEDIUM | HIGH | MEDIUM | HIGH (점수 없음) |
+| S6 | 화장실, 20초, 아동 | **HIGH/MEDIUM** (비결정적) | HIGH | MEDIUM | HIGH (점수 없음) |
+| S7 | 경계값 (각도 46, 속도 12, 0초) | **LOW/MEDIUM** (비결정적) | LOW | MEDIUM | LOW (점수 없음) |
+| S8 | 복도, 12초 + 3일 내 재낙상 | MEDIUM | HIGH | MEDIUM | HIGH (점수 없음) |
+| S9 | 붕괴자세 + 충격음 + 25초 | HIGH | HIGH | MEDIUM | HIGH (점수 없음) |
+| S10 | 위험물 + 붕괴자세 | HIGH | MEDIUM | MEDIUM | MEDIUM (점수 없음) |
+
+LLM 모드는 10개 시나리오에 대해 총 30회 호출(시나리오당 3회)됐고, **30회 전부 MEDIUM**을 반환했습니다.
+자체 점수도 좁게 뭉쳤습니다 — `scripts/compare_modes.py` 가 표 아래에 함께 출력하는 분포는
+`LLM 자체 점수 분포 (총 30회 호출): 65점 29회, 73점 1회` 였습니다. 즉 이 표의 `llm` 열은
+"다른 모드와 판정이 엇갈린다"가 아니라 "입력과 무관하게 같은 답을 낸다"로 읽어야 합니다.
+
+`rule` 열의 비결정성(S4, S6, S7)은 `agentic/nodes/decision.py:91`의 `random.randint(-5, 5)`
+지터가 원인이며, S1과 S5가 같은 판정을 받는 것은 같은 파일 78번 줄에서 읽어들인
+`no_movement_seconds`가 이후 어디에도 쓰이지 않기 때문이다. 둘 다 버그이지만
+룰 기반 경로(`decision.py`)를 대조군으로 그대로 남겨두기 위해 의도적으로 고치지 않았다.
+
+이 실험은 "온톨로지 모드가 더 정확하다"를 보여주지 않는다. 프로젝트 안에 라벨링된
+낙상 정답 데이터셋이 없어 정확도 자체를 측정할 방법이 없기 때문이다. 대신 확인된 것은
+① 재현성(난수 없이, 같은 입력 사실과 같은 이력이면 같은 판정), ② 무동작 지속 시간을 실제로 판정에
+반영함, ③ 노인·아동을 함께 취약 계층으로 다룸, ④ 3일 내 재낙상 같은 시간축 정보를
+판정에 사용함(S8), ⑤ 판정 근거를 발동 규칙 ID로 제시할 수 있음(아래 목록) — 이 다섯 가지다.
+
+##### 발동 규칙 (ontology 모드)
+
+- **S1** 거실, 8초, 성인 → **LOW** — 없음
+- **S2** 화장실, 45초, 노인 → **HIGH** — `r1` 고위험 구역에서 30초 이상 무동작, `r5` 취약 계층 + 고위험 구역 + 무동작 15초 이상, `r9` 취약 계층 + 무동작 15초 이상, `r10` 붕괴 자세 + 무동작 10초 이상
+- **S3** 복도, 12초, 성인, 비명 → **MEDIUM** — `r8` 비명 감지, `r10` 붕괴 자세 + 무동작 10초 이상
+- **S4** 계단, 35초, 성인 → **HIGH** — `r1` 고위험 구역에서 30초 이상 무동작, `r10` 붕괴 자세 + 무동작 10초 이상
+- **S5** 거실, 300초, 성인 → **HIGH** — `r3` 무동작 60초 이상, `r10` 붕괴 자세 + 무동작 10초 이상
+- **S6** 화장실, 20초, 아동 → **HIGH** — `r5` 취약 계층 + 고위험 구역 + 무동작 15초 이상, `r7` 고위험 구역에서 10~30초 무동작, `r9` 취약 계층 + 무동작 15초 이상, `r10` 붕괴 자세 + 무동작 10초 이상
+- **S7** 경계값 (각도 46, 속도 12, 0초) → **LOW** — 없음
+- **S8** 복도, 12초 + 3일 내 재낙상 → **HIGH** — `r6` 3일 내 동일 구역 재낙상(30분 이상 경과) + 무동작 10초 이상, `r10` 붕괴 자세 + 무동작 10초 이상, `r13` 3일 내 동일 구역 재낙상(30분 이상 경과)
+- **S9** 붕괴자세 + 충격음 + 25초 → **HIGH** — `r4` 붕괴 자세 + 충격음 + 무동작 20초 이상, `r10` 붕괴 자세 + 무동작 10초 이상, `r11` 충격음 + 붕괴 자세
+- **S10** 위험물 + 붕괴자세 → **MEDIUM** — `r12` 주변 위험물 + 붕괴 자세
+
+#### 실행
+
+```bash
+# SWI-Prolog 설치 (최초 1회)
+sudo apt-get install -y swi-prolog-nox
+pip install pyswip rdflib
+
+# 온톨로지 → Prolog 사실 재생성 (ontology.ttl 수정 시)
+python -m agentic.ontology.schema
+
+# 4개 모드 비교 실험 (임시 DB 를 스스로 만들어 쓰므로 incidents.db 를 건드리지 않는다)
+python -m scripts.compare_modes
+
+# 영상 처리에 온톨로지 모드 적용
+python main_agentic.py --video input/sample.mp4 --skip-vlm --skip-audio --decision-mode ontology
+```
 
 ---
 

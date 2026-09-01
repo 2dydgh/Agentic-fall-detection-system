@@ -1,0 +1,97 @@
+@prefix :     <http://example.org/falldetect#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+<http://example.org/falldetect> a owl:Ontology ;
+    rdfs:comment "낙상 감지 심각도 판정 온톨로지" .
+
+##############################
+# Incident
+##############################
+:Incident a owl:Class ; rdfs:comment "판정 대상 사건" .
+
+##############################
+# Zone
+##############################
+:Zone              a owl:Class .
+:HighRiskZone      a owl:Class ; rdfs:subClassOf :Zone .
+:NormalZone        a owl:Class ; rdfs:subClassOf :Zone .
+:UnclassifiedZone  a owl:Class ; rdfs:subClassOf :Zone ;
+    rdfs:comment "위험도를 단정할 근거가 없는 구역" .
+
+:WetArea    a owl:Class ; rdfs:subClassOf :HighRiskZone .
+:Bathroom   a owl:Class ; rdfs:subClassOf :WetArea .
+:Kitchen    a owl:Class ; rdfs:subClassOf :WetArea .
+:Stairs     a owl:Class ; rdfs:subClassOf :HighRiskZone .
+:Balcony    a owl:Class ; rdfs:subClassOf :HighRiskZone .
+
+:Hallway    a owl:Class ; rdfs:subClassOf :NormalZone .
+:LivingRoom a owl:Class ; rdfs:subClassOf :NormalZone .
+:Bedroom    a owl:Class ; rdfs:subClassOf :NormalZone .
+
+:Outdoor    a owl:Class ; rdfs:subClassOf :UnclassifiedZone .
+:OtherZone  a owl:Class ; rdfs:subClassOf :UnclassifiedZone .
+
+##############################
+# Person
+##############################
+:Person            a owl:Class .
+:VulnerablePerson  a owl:Class ; rdfs:subClassOf :Person .
+:Elderly           a owl:Class ; rdfs:subClassOf :VulnerablePerson .
+:Child             a owl:Class ; rdfs:subClassOf :VulnerablePerson .
+:Adult             a owl:Class ; rdfs:subClassOf :Person .
+:UnknownPerson     a owl:Class ; rdfs:subClassOf :Person .
+
+##############################
+# Posture
+##############################
+:Posture   a owl:Class .
+:Collapsed a owl:Class ; rdfs:subClassOf :Posture ;
+    rdfs:comment "몸통 각도 70도 이상" .
+:Leaning   a owl:Class ; rdfs:subClassOf :Posture ;
+    rdfs:comment "몸통 각도 45도 이상 70도 미만" .
+:Upright   a owl:Class ; rdfs:subClassOf :Posture ;
+    rdfs:comment "몸통 각도 45도 미만" .
+
+##############################
+# AudioEvent
+##############################
+:AudioEvent    a owl:Class .
+:DistressSound a owl:Class ; rdfs:subClassOf :AudioEvent .
+:Scream        a owl:Class ; rdfs:subClassOf :DistressSound .
+:ImpactSound   a owl:Class ; rdfs:subClassOf :AudioEvent .
+
+##############################
+# Hazard
+##############################
+:Hazard a owl:Class ; rdfs:comment "장면 내 위험 요소" .
+
+##############################
+# Severity
+##############################
+:Severity a owl:Class .
+:Low      a owl:Class ; rdfs:subClassOf :Severity .
+:Medium   a owl:Class ; rdfs:subClassOf :Severity .
+:High     a owl:Class ; rdfs:subClassOf :Severity .
+
+##############################
+# ResponseAction
+##############################
+:ResponseAction   a owl:Class .
+:LogAction        a owl:Class ; rdfs:subClassOf :ResponseAction .
+:AlertAction      a owl:Class ; rdfs:subClassOf :ResponseAction .
+:EmergencyAction  a owl:Class ; rdfs:subClassOf :ResponseAction .
+
+##############################
+# Object Properties
+##############################
+:occurredIn          a owl:ObjectProperty ; rdfs:domain :Incident ; rdfs:range :Zone .
+:involves            a owl:ObjectProperty ; rdfs:domain :Incident ; rdfs:range :Person .
+:hasPosture          a owl:ObjectProperty ; rdfs:domain :Incident ; rdfs:range :Posture .
+:hasAudioEvent       a owl:ObjectProperty ; rdfs:domain :Incident ; rdfs:range :AudioEvent .
+:hasHazard           a owl:ObjectProperty ; rdfs:domain :Incident ; rdfs:range :Hazard .
+:hasSeverity         a owl:ObjectProperty ; rdfs:domain :Incident ; rdfs:range :Severity .
+:requiresAction      a owl:ObjectProperty ; rdfs:domain :Severity ; rdfs:range :ResponseAction .
+:precededBy          a owl:ObjectProperty ; rdfs:domain :Incident ; rdfs:range :Incident .
+:noMovementDuration  a owl:DatatypeProperty ; rdfs:domain :Incident ; rdfs:range xsd:integer .
