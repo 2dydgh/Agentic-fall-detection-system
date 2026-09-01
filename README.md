@@ -30,834 +30,174 @@
 
 ---
 
+## 무엇을 만들었나
+
+CCTV 영상과 오디오로 낙상을 감지하고, 심각도를 판정해 대응까지 자동화하는
+실시간 관제 시스템이다. LangGraph 파이프라인(지각 → 분석 → 판단 → 행동) 위에
+**2-Track 구조**를 얹었다. 실시간 경로가 밀리초 단위로 판정해 즉시 내부 알림을
+보내고, 비동기 경로의 LLM Agent가 그 뒤에 119 신고 여부 같은 무거운 판단을
+맡는다.
+
+판정 경로는 네 가지이며 실행 시 선택한다. 그중 **온톨로지 모드**는 RDF/OWL 개념
+계층과 Prolog 규칙으로 판정하고, **발동한 규칙 ID를 판단 근거로 함께 반환한다.**
+
 ## 시스템 아키텍처
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                    2-Track Architecture                               │
-│                                                                      │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  실시간 경로 — 조건 분기 파이프라인 (~0.001ms)                    │  │
-│  │  Agent 아님. 낙상 감지 여부에 따라 경로가 갈린다.                │  │
-│  │                                                                │  │
-│  │  CCTV       Audio                                              │  │
-│  │    │          │                                                │  │
-│  │    ▼          ▼                                                │  │
-│  │  Perception → Audio → fall_detected?                           │  │
-│  │  (YOLO11n)  (YAMNet)   ├─ Yes → Analysis → Decision → Action  │  │
-│  │                        │       (Florence-2) (룰/LLM) (알림/DB) │  │
-│  │                        └─ No  → END (즉시 종료)                │  │
-│  └──────────────────────────────────────────────────│─────────────┘  │
-│                                                     │                │
-│                                  낙상 감지 시 dispatch (별도 스레드)  │
-│                                                     │                │
-│  ┌──────────────────────────────────────────────────▼─────────────┐  │
-│  │  비동기 경로 — 진짜 AI Agent                                    │  │
-│  │  LLM이 스스로 판단하고 도구를 선택. 실시간 경로 블로킹 없음.     │  │
-│  │                                                                │  │
-│  │  EscalationAgent (LangGraph ReAct 그래프, max 4회, timeout 30s)│  │
-│  │  ┌──────────────────────────────────────────────────────────┐  │  │
-│  │  │  reason (Ollama LLM) ──(조건 분기)──▶ act (도구 실행)    │  │  │
-│  │  │    │                                   │                 │  │  │
-│  │  │    └──(done/timeout/max)──▶ END        └──▶ reason (루프)│  │  │
-│  │  │                                                          │  │  │
-│  │  │  도구: query_incident_history, reanalyze_with_vlm,       │  │  │
-│  │  │        escalate_emergency, update_severity               │  │  │
-│  │  └──────────────────────────────────────────────────────────┘  │  │
-│  │                     │                                          │  │
-│  │                     ▼                                          │  │
-│  │              agent_results DB 저장                              │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│         │                                        │                   │
-│         ▼                                        ▼                   │
-│  ┌─────────────┐                        ┌─────────────┐             │
-│  │  FastAPI    │ ◀────── REST API ─────▶│  Next.js   │             │
-│  │  Backend   │  /api/incidents         │  Dashboard  │             │
-│  │  (8000)    │  /api/agent_results     │   (3000)    │             │
-│  └─────────────┘                        └─────────────┘             │
-└──────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Track 1 — 실시간 경로 (조건 분기 파이프라인)                             │
+│                                                                          │
+│   CCTV        Audio                                                      │
+│     │           │                                                        │
+│     ▼           ▼                                                        │
+│  Perception → Audio ──▶ fall_detected?                                   │
+│  (YOLO11n)   (YAMNet)    ├─ No  ─▶ END                                   │
+│                          └─ Yes ─▶ Analysis ─▶ Decision ─▶ Action        │
+│                                    (Florence-2)    │        (DB/알림)    │
+│                                                    │            │        │
+│                        ┌───────────────────────────┘            │        │
+│                        │  판정 경로 4가지 (--decision-mode)      │        │
+│                        ├─ rule       휴리스틱 점수 0~100         │        │
+│                        ├─ attention  Multi-Head Self-Attention   │        │
+│                        ├─ llm        Ollama 프롬프트 판단        │        │
+│                        └─ ontology   RDF/OWL + Prolog 규칙 추론  │        │
+│                                      → 발동 규칙 ID 반환         │        │
+└──────────────────────────────────────────────────────────────────│───────┘
+                                                                   │
+                                        낙상 감지 시 dispatch (별도 스레드)
+                                                                   ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Track 2 — 비동기 경로 (LangGraph ReAct Agent, max 4회 / 30s)             │
+│                                                                          │
+│   EscalationAgent ── reason(Ollama) ⇄ act(도구 4종) ── 119 신고 판단      │
+│                                                                          │
+│   Track 1의 발동 규칙을 입력으로 받아 "왜 HIGH인지" 아는 상태로 시작한다. │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 파이프라인 vs Agent — 무엇이 다른가?
+설계 근거와 각 노드의 상세는 **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** 참고.
 
-| 구분 | 실시간 경로 (파이프라인) | 비동기 경로 (Agent) |
-|------|----------------------|-------------------|
-| **흐름** | 조건 분기 (fall_detected 여부로 경로 분기) | 동적 (LLM이 매번 다르게 결정) |
-| **도구 선택** | 없음 — 정해진 처리만 실행 | LLM이 4개 도구 중 스스로 선택 |
-| **루프** | 없음 — 한 번 실행하고 끝 | reason → act → reason 피드백 루프 |
-| **종료** | 낙상 미감지 시 즉시 종료 / 감지 시 Action 후 종료 | Agent가 "끝"이라고 판단하면 종료 |
-| **속도** | ~0.001ms (실측) | 최대 30초 (비블로킹) |
-| **역할** | 즉시 대응 (골든타임 확보) | 정밀 분석 (에스컬레이션 판단) |
-
-> **"빠르게 대응할 건 파이프라인으로, 똑똑하게 판단할 건 Agent로"** — 두 경로가 동시에 돌아감
-
----
-
-## 핵심 개발 내용 및 성과
-
-### 1. Agentic Workflow 설계 — LangGraph 기반 자율 판단 파이프라인
-
-| 항목 | 내용 |
-|------|------|
-| **기존 방식의 한계** | `if fallen → alert()` 형태의 정적 룰 기반 로직 |
-| **해결 방법** | LangGraph로 `PerceptionNode → AudioNode → AnalysisNode → DecisionNode → ActionNode` 파이프라인 구현 |
-| **핵심 효과** | 비전 + 오디오 멀티모달 Late Fusion, 장소/위험 요소에 따라 동적으로 **심각도(Severity) 점수** 산출 |
-
-> **결과:** 가짜 알람(False Positive) 대폭 감소 + 실제 위급 상황 감지 정확도 획기적 향상
-
----
-
-### 2. Attention-based Multimodal Fusion — 동적 모달리티 가중치 학습
-
-```
-비디오 프레임               오디오 청크 (0.975초)         장면 이미지
-    │                           │                          │
-    ▼                           ▼                          ▼
- YOLO11n-pose               YAMNet (521클래스)         Florence-2 VLM
- (각도/속도/부동시간)       (비명/충격음/신뢰도)       (나이/장소/위험요소)
-    │                           │                          │
-    ▼                           ▼                          ▼
- Pose Feature (6d)         Audio Feature (6d)         VLM Feature (6d)
-    │                           │                          │
-    └───────────────────────────┼──────────────────────────┘
-                                ▼
-                   Multi-Head Self-Attention (4 heads)
-                   + Modality Embedding + LayerNorm
-                                │
-                                ▼
-                    ┌───────────┴───────────┐
-                    ▼                       ▼
-              Score Head               Class Head
-           (severity 0~100)        (LOW/MEDIUM/HIGH)
-```
-
-| 항목 | 내용 |
-|------|------|
-| **문제** | 기존 Rule-based Late Fusion은 고정 가중치(`비명 +15점`, `충격음 +10점`) → 모달리티 간 상호작용 무시 |
-| **해결** | PyTorch Multi-Head Self-Attention으로 3개 모달리티(Pose, Audio, VLM) 간 동적 가중치 학습 |
-| **학습 방식** | 도메인 지식 기반 9개 시나리오에서 10,000개 학습 데이터 생성, 모달리티 간 상호작용(비명+큰 각도, 고령자+위험 장소 등) 반영 |
-| **효과** | Validation Accuracy 91.0%, Score MAE 6.85점 달성. 상황에 따라 Pose/Audio/VLM 가중치가 동적으로 변화 |
-
-**Attention Weight 분석 — 모달리티별 중요도:**
-```
-Pose:  0.6122 ##############################
-Audio: 0.2152 ##########
-VLM:   0.1726 ########
-```
-
-> **결과:** Rule-based 고정 가중치 → Attention 동적 가중치 전환으로, 비명+급격한 낙상은 Audio 가중치 상승, 고령자+위험 장소는 VLM 가중치 상승 — **상황별 최적 모달리티 조합을 자동으로 학습**
-
----
-
-### 3. LLM Agent Mode — Ollama 기반 지능형 판단 (on/off 전환)
-
-| 항목 | 내용 |
-|------|------|
-| **기존 방식** | 룰 기반 점수 계산 (`if score > 75 → HIGH`) — 빠르지만 맥락 이해 불가 |
-| **Agent Mode** | Ollama 로컬 LLM이 센서 데이터를 종합 판단 — "계단 + 고령자 + 비명 → 119 필요" |
-| **설계 철학** | 실시간 관제에서는 룰 기반(빠름), 정밀 분석 시 LLM(똑똑함)으로 on/off 전환 |
+## 빠른 시작
 
 ```bash
-# 룰 기반 (기본, ~0.001ms)
-python main_agentic.py --video input/sample.mp4
+# 1) 시스템 패키지 (온톨로지 모드에 필요 — 없으면 룰 기반으로 폴백)
+sudo apt-get install -y swi-prolog-nox
 
-# LLM Agent 모드 (Ollama 필요, ~5-8초/판단)
-python main_agentic.py --video input/sample.mp4 --agent-mode
+# 2) 백엔드
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m uvicorn api.main:app --port 8000 --reload
 
-# API 런타임 토글
-curl -X POST http://localhost:8000/api/agent_toggle
+# 3) 프론트엔드
+cd frontend && npm install && npm run dev      # localhost:3000
 ```
 
-| | 룰 기반 (OFF) | LLM Agent (ON) |
-|--|--------------|----------------|
-| 속도 | ~0.001ms (실측) | ~5-8초 (실측, 3B 모델 기준) |
-| 판단력 | 고정 점수 계산 | 맥락 기반 종합 판단 |
-| 비용 | 없음 | 없음 (로컬 Ollama) |
-| LLM 실패 시 | — | 자동 룰 기반 폴백 |
+영상 파일 하나를 CLI로 처리하려면:
 
-> **설계 근거:** 낙상 감지는 골든타임이 생명이므로 **실시간 경로는 룰 기반(~0.001ms)으로 즉시 대응**하고, LLM은 비동기 후속 판단 또는 사후 정밀 분석 용도로 설계. "Agentic하게 만들 수 있느냐"와 "만들어야 하느냐"는 다른 문제 — **의도적으로 속도를 우선한 엔지니어링 판단**
-
----
-
-### 4. 다중 카메라 동시 스트리밍 — FastAPI Async 아키텍처
-
-```python
-# YOLO 추론이 asyncio 이벤트 루프를 블로킹하지 않도록 처리
-loop = asyncio.get_event_loop()
-result = await loop.run_in_executor(executor, yolo_inference, frame)
+```bash
+python main_agentic.py --video input/sample.mp4 --decision-mode ontology
 ```
 
-| 항목 | 내용 |
-|------|------|
-| **문제** | 무거운 YOLO 추론이 단일 스레드 이벤트 루프를 블로킹 |
-| **해결** | `run_in_executor` 기반 멀티스레딩 MJPEG 스트리밍 |
-| **효과** | YOLO 추론을 별도 스레드로 분리하여 다중 카메라 동시 스트리밍 가능 |
+## 판정 모드 4가지
 
----
+| | 방식 | 판단 근거 | 재현성 |
+|---|---|---|---|
+| `rule` | 휴리스틱 점수 가산 | 없음 (점수만) | 난수로 흔들림 |
+| `attention` | Self-Attention 융합 | 모달리티 가중치 | 있음 |
+| `llm` | Ollama 프롬프트 | 자연어 (사후 생성) | 없음 |
+| **`ontology`** | **Prolog 규칙 추론** | **발동 규칙 ID** | **있음 (조건부)** |
 
-### 5. 포즈 추정 휴리스틱 튜닝 — False Positive 제거
+같은 입력 10개 시나리오를 네 경로로 돌린 결과에서 확인된 것들이다.
+
+- **무동작 300초와 8초가 `rule` 모드에서 같은 판정을 받는다** — 무동작 지속
+  시간이 점수식에 쓰이지 않는다(`decision.py:78`)
+- **경계값에서 `rule` 모드의 판정이 실행마다 갈린다** — 점수에 난수가 섞여
+  있다(`decision.py:91`)
+- **`llm` 모드는 30회 호출 전부 MEDIUM을 반환했다** — 입력과 무관하게 같은 답
+- **3일 내 재낙상 판정은 `ontology` 모드만 가능하다** — 나머지 셋은 현재
+  프레임만 보므로 이력이라는 개념이 없다
+
+```
+S8 (복도 12초 무동작)   이력 없음 → LOW
+                        3일 내 재낙상 → HIGH
+                        r6 (동일 구역 재낙상 + 무동작 10초 이상)
+                        r13 (동일 구역 재낙상)
+```
+
+`decision.py`는 비교 대조군이므로 위 결함을 의도적으로 고치지 않았다. 실험
+전문(10개 시나리오 표, 규칙 16개, Prolog 연동 상세)은
+**[ONTOLOGY.md](docs/ONTOLOGY.md)** 참고.
+
+```bash
+python -m scripts.compare_modes      # 비교 실험 재실행 (임시 DB 사용)
+```
+
+## 기술 스택
+
+| 분류 | 기술 |
+|---|---|
+| **AI / Agent** | LangGraph, YOLO11n-pose, Florence-2, YAMNet, Ollama, PyTorch |
+| **온톨로지 / 기호 추론** | SWI-Prolog 9.0, pyswip, RDF/OWL + rdflib, Turtle |
+| **Backend** | Python 3.12, FastAPI, Uvicorn, SQLite |
+| **Frontend** | Next.js (React), TailwindCSS |
+| **알림** | Gmail SMTP, Slack Webhook |
+
+## 프로젝트 구조
 
 <details>
-<summary><b>낙상 판정 알고리즘 상세 (클릭하여 펼치기)</b></summary>
+<summary>디렉터리 트리 (펼치기)</summary>
 
 ```
-공통적인 문제:
-  - 쪼그려 앉기(Squatting) → 낙상으로 오인 (기울기 유사)
-  - 빠른 전진 동작 → 순간적으로 낙상 각도 통과
+agentic/
+├── graph.py                  # LangGraph 워크플로우 + 판정 모드 4-way 분기
+├── state.py                  # AgentState 스키마
+├── nodes/
+│   ├── perception.py         # YOLO11n 포즈 추정
+│   ├── audio.py              # YAMNet 오디오 분류
+│   ├── analysis.py           # Florence-2 VLM 분석
+│   ├── decision.py           # 룰 / Attention 판정  (비교 대조군, 무변경)
+│   ├── decision_llm.py       # LLM 판정 (Ollama)
+│   ├── decision_ontology.py  # 온톨로지 + Prolog 판정
+│   └── action.py             # DB / 스냅샷 / 알림 / Agent 디스패치
+├── ontology/                 # ── 온톨로지 기반 설명가능 판정
+│   ├── ontology.ttl          #    RDF/OWL 정본 (개념 38 · 관계 9)
+│   ├── schema.py             #    ttl → Prolog is_a/2 변환 + 순환 검증
+│   ├── facts.py              #    AgentState → Prolog 사실 (순수 함수)
+│   ├── history.py            #    사건 이력 → 시간축 사실
+│   ├── rules.pl              #    판정 규칙 16개
+│   ├── engine.py             #    pyswip 엔진 · 전역 Lock · 사실 격리
+│   └── visualize.py          #    ttl → Mermaid 다이어그램
+├── fusion/                   # Attention 멀티모달 융합 (학습/추론)
+├── agent/                    # 비동기 에스컬레이션 Agent (ReAct)
+├── audio/                    # 오디오 청크 추출 / 라벨 매핑
+└── tools/                    # DB · 이메일 · Slack · 리포트
 
-해결 로직:
-  1. 신체 기울기(Angle) 임계치: 45° (기존 30° → 상향)
-  2. 즉발성 알람: 완전 제거
-  3. 지속 시간 조건: 0.75초(15프레임) 이상 바닥 평행 상태 유지 시에만 낙상 판정
+api/main.py                   # FastAPI + MJPEG 스트리밍
+frontend/                     # Next.js 관제 대시보드
+scripts/compare_modes.py      # 판정 모드 4종 비교 실험
+tests/                        # pytest (144개)
 ```
 
 </details>
 
-> **결과:** 일상 동작과 실제 낙상의 완벽한 구분, 견고한 탐지 정확도 확보
+## 데이터셋
 
----
+테스트 입력 영상은 **AI Hub**의 「낙상사고 위험동작 영상-센서 쌍 데이터」를 사용했다.
+용량·라이선스 문제로 저장소에는 포함하지 않는다.
 
-### 6. 관제실 특화 대시보드 — Next.js + TailwindCSS
+## 문서
 
-**주요 UI 기능:**
-- 낙상 감지 즉시 **화면 전체 붉은색 맥박(Pulse) 점멸**
-- **출동 요원 배치** 타이포그래피 오버레이 자동 출력
-- SQLite DB와 **2초 폴링**으로 실시간 통계 갱신
-- **다크 모드 전용 UI**
-
----
-
-### 7. 📧 실시간 자동 긴급 이메일 발송 — 오프라인 2중 안전장치
-
-```
-낙상 감지 (HIGH Severity)
-        │
-        ├── 해당 프레임 캡처
-        ├── Florence-2 상황 분석 보고서 생성 (TXT)
-        └── Gmail SMTP → 담당자 스마트폰으로 즉시 전송
-              └── 첨부: 낙상 스냅샷 + 분석 보고서
-```
-
-> **결과:** 보안 담당자가 자리를 비운 **최악의 시나리오에서도** 스마트폰으로 즉시 상황 파악 가능
-
-<div align="center">
-  <table>
-    <tr>
-      <td align="center">
-        <img src="figures/mail_list.PNG" alt="Email List" width="280" /><br/>
-        <sub><b>이메일함 — 다중 낙상 감지 알림</b><br/>발생할 때마다 자동으로 긴급 메일 수신</sub>
-      </td>
-      <td align="center">
-        <img src="figures/mail_content.PNG" alt="Email Content" width="280" /><br/>
-        <sub><b>이메일 본문 — 현장 상황 요약</b><br/>Florence-2 VLM이 진단한 상황 분석 포함</sub>
-      </td>
-    </tr>
-    <tr>
-      <td align="center">
-        <img src="figures/snapshot.PNG" alt="Fall Snapshot" width="280" /><br/>
-        <sub><b>낙상 감지 스냅샷</b><br/>낙상 발생 순간 자동 캡처된 현장 사진</sub>
-      </td>
-      <td align="center">
-        <img src="figures/report.PNG" alt="Incident Report" width="280" /><br/>
-        <sub><b>자동 생성 긴급 상황 보고서</b><br/>심각도·위치·권고 조치가 담긴 TXT 보고서</sub>
-      </td>
-    </tr>
-  </table>
-</div>
-
----
-
-## 🛠️ 기술 스택
-
-| 분류 | 기술 |
-|------|------|
-| **AI / Agent** | LangGraph, YOLO11n-pose (Ultralytics), Florence-2 (Microsoft), YAMNet (Google), Ollama (LLM Agent), PyTorch (Attention Fusion) |
-| **온톨로지 / 기호 추론** | SWI-Prolog 9.0 (규칙 추론 엔진), pyswip (Python 바인딩), RDF/OWL + rdflib (개념 계층 정본), Turtle (`.ttl`) |
-| **Backend** | Python 3.10+, FastAPI, Uvicorn, SQLite |
-| **Frontend** | Next.js (React), TailwindCSS, Lucide Icons |
-| **알림** | Gmail SMTP, Slack Webhook (선택) |
-
----
-
-## 📊 데이터셋
-
-테스트에 사용된 입력 영상은 **AI Hub**의 공개 데이터셋을 활용했습니다.
-
-| 항목 | 내용 |
-|------|------|
-| **데이터셋명** | 낙상사고 위험동작 영상-센서 쌍 데이터 |
-| **출처** | [AI Hub](https://aihub.or.kr/) (한국지능정보사회진흥원) |
-| **비고** | 입력 영상은 용량 및 라이선스 문제로 저장소에 포함되지 않습니다 |
-
----
-
-
-## 🚀 빠른 시작 (Quick Start)
-
-### 사전 준비 (Prerequisites)
-
-- Python **3.10** 이상
-- Node.js & npm
-- [Ollama](https://ollama.com/) (LLM Agent Mode 사용 시, 선택사항)
-
-### ① AI 모델 다운로드
-
-> `.pt` 모델 파일은 용량 문제로 Git에 포함되지 않습니다. 아래 명령어로 다운로드하세요.
-
-```bash
-mkdir -p models
-wget -O models/yolov26n-pose.pt \
-  https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n-pose.pt
-```
-
-### ①-1 Ollama 설정 (Agent Mode 사용 시, 선택)
-
-```bash
-# Ollama 설치
-curl -fsSL https://ollama.com/install.sh | sh
-
-# LLM 모델 다운로드 (llama3.2, ~2GB)
-ollama pull llama3.2
-```
-
-### ② 백엔드 실행
-
-```bash
-# 가상환경 생성 및 활성화
-python3 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# 시스템 패키지 설치 (온톨로지 모드에 필요)
-# 없어도 나머지는 동작하지만, 온톨로지 모드가 조용히 룰 기반으로 폴백한다
-sudo apt-get install -y swi-prolog-nox
-
-# 의존성 설치
-pip install -r requirements.txt
-
-# FastAPI 서버 실행
-.venv/bin/python3 -m uvicorn api.main:app --port 8000 --reload
-```
-
-### ② 프론트엔드 실행
-
-```bash
-# 새 터미널에서 실행
-cd frontend
-npm install
-npm run dev
-```
-
-### ③ 접속
-
-브라우저에서 **[http://localhost:3000](http://localhost:3000)** 접속 → 다중 구역 낙상 관제 대시보드 확인
-
----
-
-## 📁 프로젝트 구조
-
-```
-Agentic-fall-detection-system/
-├── agentic/                  # LangGraph 에이전트 핵심 로직
-│   ├── graph.py              # 워크플로우 그래프 정의
-│   ├── state.py              # 에이전트 상태 스키마 (AgentState)
-│   ├── nodes/
-│   │   ├── perception.py     # YOLO11n 포즈 추정 노드
-│   │   ├── audio.py          # YAMNet 오디오 분류 노드
-│   │   ├── analysis.py       # Florence-2 VLM 분석 노드
-│   │   ├── decision.py       # 심각도 판단 (Attention Fusion / 룰 기반 자동 선택)
-│   │   ├── decision_llm.py   # LLM Agent 심각도 판단 (Ollama)
-│   │   ├── decision_ontology.py # 온톨로지+Prolog 규칙 판단 (발동 규칙 반환)
-│   │   └── action.py         # 이메일/DB/Slack 액션 노드
-│   ├── audio/
-│   │   ├── extractor.py      # 프레임 동기화 오디오 청크 추출
-│   │   └── labels.py         # YAMNet 521클래스 → 비명/충격음 매핑
-│   ├── agent/
-│   │   ├── tools.py          # Agent 도구 정의 (4종)
-│   │   ├── escalation_agent.py # ReAct 루프 에스컬레이션 Agent
-│   │   └── runner.py         # 비동기(스레드) Agent 실행기
-│   ├── fusion/
-│   │   ├── feature.py        # 모달리티별 Feature 추출 (Pose/Audio/VLM → 6-dim)
-│   │   ├── model.py          # Multi-Head Self-Attention Fusion Model
-│   │   ├── dataset.py        # 시나리오 기반 학습 데이터 생성
-│   │   └── train.py          # 학습/평가/비교 실험 스크립트
-│   ├── ontology/             # 온톨로지 기반 설명가능 판정 (섹션 9)
-│   │   ├── ontology.ttl      # RDF/OWL 정본 — 개념 38개 + 관계 9개
-│   │   ├── schema.py         # ttl → Prolog is_a/2 변환 + 순환 검증
-│   │   ├── generated/        #   └ ontology_facts.pl (schema.py 생성물)
-│   │   ├── facts.py          # AgentState → Prolog 사실 (순수 함수)
-│   │   ├── history.py        # 사건 이력 → prior_incident/3 시간축 사실
-│   │   ├── rules.pl          # 판정 규칙 16개 + 파생 술어 (이행 폐쇄)
-│   │   ├── engine.py         # pyswip 엔진 · 전역 Lock · 판정마다 사실 격리
-│   │   └── visualize.py      # ttl → Mermaid 다이어그램
-│   └── tools/                # 보조 도구 모음
-├── scripts/
-│   └── compare_modes.py      # 4개 판정 모드 비교 실험 → 비교표 생성
-├── api/
-│   └── main.py               # FastAPI 라우터 & MJPEG 스트리밍
-├── frontend/
-│   └── src/
-│       ├── app/
-│       │   ├── page.tsx          # 메인 페이지 (orchestrator, ~35줄)
-│       │   ├── layout.tsx        # 레이아웃 (Inter + Roboto Mono)
-│       │   └── globals.css       # Grafana 테마 + 애니메이션
-│       ├── components/
-│       │   ├── Sidebar.tsx       # 아이콘 네비게이션 사이드바
-│       │   ├── Header.tsx        # 헤더 + 알림 배너
-│       │   ├── CameraCard.tsx    # 개별 카메라 + 낙상 오버레이
-│       │   ├── CameraGrid.tsx    # 2x2 ↔ 포커스 전환 그리드
-│       │   ├── BottomBar.tsx     # 하단 바 컨테이너
-│       │   ├── StatsPanel.tsx    # 통계 패널
-│       │   ├── MonitorTable.tsx  # 카메라별 실시간 모니터링
-│       │   └── HistoryPanel.tsx  # 카메라별 인시던트 히스토리
-│       ├── hooks/                # useIncidents, useAudioStatus, useClock 등
-│       └── types/index.ts        # 공유 타입 + CAMERAS 상수
-├── figures/                  # 스크린샷 및 구동 화면
-├── main_agentic.py           # 메인 실행 진입점
-└── requirements.txt
-```
-
----
-
-## 🏛️ 2-Track 설계 근거 — 왜 전부 Agent로 만들지 않았는가?
-
-### 핵심 전제: 낙상 감지는 골든타임 싸움이다
-
-> 고령자 낙상 후 **1시간 이내** 응급 처치 여부가 사망률을 좌우한다 (Long Lie Problem).
-> LLM Agent의 ReAct 루프는 1회에 **5~8초**, 최대 4회 반복하면 **30초**가 걸린다.
-> 이 30초 동안 알림이 지연되면, 골든타임이 그만큼 줄어든다.
-
-### 설계 판단: 속도와 지능을 분리한다
-
-```
-                    "빠르게 대응할 건 파이프라인으로, 똑똑하게 판단할 건 Agent로"
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│                                                                         │
-│   [실시간 경로] ~0.001ms, 블로킹 없음             [비동기 경로] 최대 30s  │
-│                                                                         │
-│   Perception → Decision(룰) → Action ──dispatch──▶ EscalationAgent     │
-│        │              │           │                      │              │
-│    YOLO 포즈      고정 점수     즉시 알림           LLM이 자율 판단      │
-│    각도/속도      계산만 수행   DB·이메일·Slack      도구 선택·루프·종료   │
-│                                                                         │
-│   지연 없이 골든타임 확보          오탐 분석, 이력 대조, 에스컬레이션    │
-│   LLM 장애와 무관하게 동작        실시간 경로를 절대 블로킹하지 않음     │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### System 1 / System 2 — 인지과학에서 빌려온 설계 철학
-
-Daniel Kahneman의 *Thinking, Fast and Slow*에서 영감을 받은 구조다.
-
-| | System 1 (실시간 경로) | System 2 (비동기 Agent) |
-|--|----------------------|----------------------|
-| **특성** | 빠르고 직관적, 자동적 | 느리지만 숙고적, 분석적 |
-| **이 시스템에서** | "각도 꺾임 + 쾅 소리 = 50점, 알람!" | "잠깐, 이 환자 어제도 넘어졌잖아. 50점이 아니라 85점이야" |
-| **판단 방식** | 고정된 룰 (점수 공식) | LLM이 이력·맥락을 종합 추론 |
-| **교정** | 불가 — 한 번 판단하면 끝 | 가능 — `update_severity`로 System 1의 판단을 사후 교정 |
-
-> **System 2가 System 1을 교정할 수 있다** — 이것이 2-Track의 핵심 가치다. 실시간 경로가 과소/과대 판단한 심각도를 비동기 Agent가 이력 조회와 VLM 재분석을 거쳐 덮어쓴다. 반대로 오탐(HIGH → LOW)도 가능하다.
-
-### 왜 이렇게 나눴는가?
-
-| 질문 | 답변 |
-|------|------|
-| **전부 Agent로 만들면?** | 매 프레임마다 LLM 호출 → 5~8초 지연 → 실시간 관제 불가. 골든타임 낭비 |
-| **전부 룰 기반이면?** | 맥락 이해 불가. "평소 이 시간대에 이 구역을 지나지 않던 사람", "낙상 후 스스로 일어났는지" 같은 판단은 규칙으로 표현하기 어려움 |
-| **2-Track이면?** | 룰 기반이 **즉시 내부 알림**(골든타임 확보) → Agent가 **외부 신고 여부 판단**(오탐 필터링, 에스컬레이션) |
-
-### 대응 단계: 내부 알림 vs 외부 신고
-
-> **"일단 내부에 알리고, 외부 신고는 신중하게"**
-
-| 단계 | 경로 | 대상 | 내용 | 오탐 시 영향 |
-|------|------|------|------|------------|
-| **1차 — 내부 알림** | 실시간 (~0.001ms) | 관제 요원 (보안실) | DB 기록, 스냅샷, 이메일 | 낮음 — 내부 확인 후 무시 가능 |
-| **2차 — 외부 신고** | 비동기 Agent (최대 30s) | 119, 보호자, 간호사 | 에스컬레이션 | 높음 — **그래서 Agent가 판단** |
-
-```
-실시간 경로:  "넘어졌다!" → 보안실 내부 알림 (오탐이어도 괜찮음)
-                  ↓ dispatch
-비동기 Agent: "진짜 위험한가?" → 이력 조회 → 상황 분석
-              ├─ 위험함 → escalate_emergency (119 신고)
-              └─ 오탐임 → update_severity(HIGH → LOW), 신고 안 함
-```
-
-실시간 경로는 **내부 알림만** 담당하고, 되돌리기 어려운 **외부 신고(119)**는 Agent가 이력·맥락을 분석한 후에만 실행한다. 이것이 2-Track으로 나눈 실질적인 이유다.
-
-### "Agentic하게 만들 수 있느냐"와 "만들어야 하느냐"는 다른 문제
-
-| | 실시간 경로 (파이프라인) | 비동기 경로 (Agent) |
-|--|----------------------|-------------------|
-| **Agent로 만들 수 있는가?** | 가능 (LLM으로 매 프레임 판단 가능) | 이미 Agent |
-| **Agent로 만들어야 하는가?** | **아니오** — 속도가 생명 | **예** — 정밀 분석에 적합 |
-| **근거** | 0.001ms vs 5~8초 = **5,000,000배 차이** | 30초 내 완료, 실시간 경로와 독립 |
-
-> **도메인의 제약 조건(실시간성)에 맞는 설계가 좋은 설계다.** 모든 것을 Agent로 만드는 것이 목표가 아니라, **적재적소에 자율성을 배치**하는 것이 진짜 Agentic 설계다. 이 시스템은 "할 수 있지만 하지 않는다"는 **의도적 엔지니어링 판단**을 내렸다.
-
----
-
-### 8. 🧠 비동기 에스컬레이션 Agent — LangGraph ReAct 그래프 기반 후속 판단
-
-```
-[실시간 경로 — 즉시 대응]                [비동기 경로 — LangGraph ReAct 그래프]
-Perception → Audio → fall?             EscalationAgent (별도 스레드)
-  └─ Yes → Decision → Action ────▶       reason ──(조건)──▶ act ──▶ reason
-  └─ No  → END                             │                       (루프)
-                                            └──(done/timeout)──▶ END
-                                                     │
-                                                     ▼
-                                              agent_results DB 저장
-```
-
-| 항목 | 내용 |
-|------|------|
-| **문제** | 실시간 경로의 룰 기반 판단은 빠르지만 맥락 이해 불가 (반복 오탐, 패턴 분석 등) |
-| **해결** | ActionNode에서 낙상 감지 시 별도 스레드로 `EscalationAgent` 비동기 실행 — 실시간 경로 블로킹 없음 |
-| **Agent 도구** | `query_incident_history` (이력 조회), `reanalyze_with_vlm` (Florence-2 재분석), `escalate_emergency` (119 에스컬레이션), `update_severity` (심각도 수정) |
-| **안전장치** | max_iterations=4, timeout=30s 이중 제한 + LLM 실패 시 룰 기반 폴백 |
-
-> 이 비동기 경로가 **Tool Calling + ReAct 루프 + 자율 판단을 갖춘 진짜 AI Agent**. 실시간 경로는 속도, 비동기 경로는 지능 — 2-Track Architecture의 핵심.
-
----
-
-### 9. 🕸️ 온톨로지 기반 설명가능 판정 (Ontology Mode)
-
-기존 판정은 0~100 점수만 반환해 "왜 그 판정인가"에 답하지 못했다.
-온톨로지 모드는 RDF/OWL 개념 계층과 Prolog 규칙 16개로 판정하고,
-발동한 규칙을 근거로 함께 반환한다.
-
-#### 착수 계기 — 기존 판정 로직에서 확인한 결함 3가지
-
-이 작업은 새 기능을 얹으려고 시작한 것이 아니라, 기존 판정 경로를 실행해
-보다가 발견한 문제에서 출발했다. 셋 다 현재 코드에 그대로 남아 있다
-(`decision.py`는 비교 대조군이므로 의도적으로 고치지 않았다).
-
-**① 판정에 난수가 섞여 있다** — `decision.py:91`
-
-```python
-base_score = 40 + angle_bonus + vel_bonus + random.randint(-5, 5)
-```
-
-임계값 부근에서 동일 입력의 판정이 갈린다. 아래 비교표 S6·S7의 `rule` 열이
-그 결과다. MEDIUM은 `save_snapshot` + `notify_security_room`을 유발하므로,
-같은 상황에서 경비실 통보 여부가 실행마다 달라진다.
-
-**② 무동작 지속 시간이 계산에 쓰이지 않는다** — `decision.py:78`
-
-`no_movement_seconds`를 읽지만 이후 점수식에 등장하지 않는다. 함수 전체에서
-할당문 1회만 나타난다. 그 결과 아래 표의 S1(8초)과 S5(300초)가 같은 판정을
-받는다. 낙상 감지에서 가장 중요한 변수가 무시되고 있었다.
-
-**③ LLM 경로가 폴백만 타고 있었다** — `decision_llm.py:53`
-
-`OLLAMA_MODEL`이 설치되지 않은 `llama3.2`를 가리켜, 호출 시 예외가 나고
-`except`가 조용히 룰 기반으로 되돌렸다. 실제로는 LLM이 한 번도 돌지 않은
-상태였다. `qwen2.5:7b`로 교체해 살린 뒤 측정한 결과가 아래 표의 `llm` 열이다.
-
-이 셋은 모두 **"판정 근거를 추적할 수 없다"**는 하나의 문제로 모인다.
-점수만 반환하는 구조에서는 잘못된 값이 나와도 어디서 비롯됐는지 알 수 없다.
-그래서 판정을 점수 계산이 아니라 규칙 추론으로 재구성했다.
-
-#### 구성
-
-```
-agentic/ontology/
-    ontology.ttl              # RDF/OWL 정본 — 개념 38개 + 관계 9개
-    schema.py                 # ttl → Prolog is_a/2 변환, 순환 검증
-    generated/
-        ontology_facts.pl     # schema.py 생성물 (커밋 대상)
-    facts.py                  # AgentState → Prolog 사실 (순수 함수, 난수 없음)
-    history.py                # incidents DB → prior_incident/3 시간축 사실
-    rules.pl                  # 판정 규칙 16개 + 파생 술어
-    engine.py                 # pyswip 엔진, 전역 Lock, 판정마다 사실 격리
-    visualize.py              # ttl → Mermaid 다이어그램
-
-agentic/nodes/decision_ontology.py   # 4번째 판정 모드
-scripts/compare_modes.py             # 4개 모드 비교 → 아래 표 생성
-```
-
-설계상 지킨 원칙은 네 가지다.
-
-| 원칙 | 구현 |
+| 문서 | 내용 |
 |---|---|
-| 계층은 한 곳에만 기록 | `ontology.ttl`이 정본, `is_a/2`는 생성물. `rules.pl`에 계층 사실 0건 |
-| 판정에 난수 없음 | `facts.py`는 순수 함수, 동일 입력 → 동일 사실 목록 |
-| 판정 간 상태 누출 없음 | `engine.judge()`가 매 판정마다 동적 술어를 `retractall` |
-| 점수를 새로 만들지 않음 | `severity_score`는 고정 매핑(LOW 25 / MEDIUM 60 / HIGH 90), 판정에 미관여 |
+| **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 2-Track 설계 근거, 왜 전부 Agent로 만들지 않았는가 |
+| **[ONTOLOGY.md](docs/ONTOLOGY.md)** | 온톨로지 · Prolog 판정 전체 (규칙 16개, 비교 실험, 연동 상세) |
+| **[DEVELOPMENT.md](docs/DEVELOPMENT.md)** | 개발 항목별 상세 (Agentic Workflow, 멀티모달 융합, 대시보드 등) |
 
-#### 판정 규칙 16개
+## 향후 발전 방향
 
-규칙은 상위 개념만 참조한다. 그래서 `Balcony` 같은 구체 개념을 추가해도
-`ontology.ttl`에 한 줄 넣으면 규칙 수정 없이 곧바로 적용된다.
-
-| | 조건 | 판정 |
-|---|---|---|
-| r1 | 고위험 구역 + 무동작 ≥ 30초 | HIGH |
-| r2 | 취약 계층(노인·아동) + 비명 | HIGH |
-| r3 | 무동작 ≥ 60초 | HIGH |
-| r4 | 붕괴 자세 + 충격음 + 무동작 ≥ 20초 | HIGH |
-| r5 | 취약 계층 + 고위험 구역 + 무동작 ≥ 15초 | HIGH |
-| r6 | 동일 구역 재낙상(5분~3일) + 무동작 ≥ 10초 | HIGH |
-| r7 | 고위험 구역 + 무동작 10~30초 | MEDIUM |
-| r8 | 비명 감지 | MEDIUM |
-| r9 | 취약 계층 + 무동작 ≥ 15초 | MEDIUM |
-| r10 | 붕괴 자세 + 무동작 ≥ 10초 | MEDIUM |
-| r11 | 충격음 + 붕괴 자세 | MEDIUM |
-| r12 | 주변 위험물 + 붕괴 자세 | MEDIUM |
-| r13 | 동일 구역 재낙상(5분~3일) | MEDIUM |
-| r14~16 | 심각도 → 대응 액션 매핑 | — |
-
-발동한 규칙이 하나도 없으면 LOW다. `r6`·`r13`은 **기존 세 경로가 구조적으로
-수행할 수 없는 판정**이다. 프레임 하나만 보고 판단하는 구조에는 이력이라는
-개념 자체가 없다.
-
-`r6`·`r13`의 5분 하한은 자기증폭을 막기 위한 것이다. `ActionNode`가 LOW를
-포함한 모든 판정을 DB에 기록하고 `PerceptionNode`가 같은 낙상의 재검출을
-허용하므로(`COOLDOWN_FRAMES=60`, 30fps 기준 약 2초), 하한이 없으면 사건 1건이
-몇 초 전의 자기 자신을 재낙상 근거로 삼아 스스로를 HIGH로 올린다. 값은
-`rules.pl`의 `repeat_fall_min_minutes/1`에 있고, 근거와 대가(5분 내 실제 2차
-낙상은 시간축 가중치를 못 받는다)를 같은 파일 주석에 적어 두었다.
-
-#### Prolog 연동에서 부딪힌 것
-
-**① 개념 계층 추론은 두 줄이다**
-
-```prolog
-kind_of(X, Y) :- is_a(X, Y).
-kind_of(X, Y) :- is_a(X, Z), kind_of(Z, Y).
-```
-
-이 재귀가 `bathroom → wet_area → high_risk_zone`을 자동으로 잇는다. 규칙은
-상위 개념(`high_risk_zone`, `vulnerable_person`)만 참조하므로, `Balcony` 같은
-구체 개념을 추가해도 `ontology.ttl`에 한 줄이면 되고 `rules.pl`은 손대지 않는다.
-
-**② SWI-Prolog 엔진은 프로세스당 하나여서 멀티스레드에서 깨진다**
-
-`api/main.py`는 `VideoStream`마다 추론 스레드를 띄우므로 카메라 4대면 판정
-노드가 동시 호출된다. 실측 결과는 이렇다.
-
-| | 질의 지연 | 스레드 4개 × 50회 |
-|---|---|---|
-| pyswip 단독 | 0.021 ms | **200회 중 50회만 성공** (`NestedQueryError`) |
-| pyswip + 전역 Lock | 0.021 ms | 200 / 200 성공 |
-| subprocess | 6.29 ms | 안전하지만 300배 느림 |
-
-`pyswip`의 `Prolog`는 이 버전에서 클래스 레벨 API(`_queryIsOpen`이 클래스 속성)라
-인스턴스별 락으로는 부족하다. 모듈 전역 Lock으로 모든 질의를 직렬화했고,
-오버헤드는 측정되지 않는 수준이다. SWI 공식 인터페이스인 `janus`는 설치된
-9.0.4에 포함돼 있지 않아 제외했다.
-
-**③ 엔진이 장기 실행되므로 판정 간 사실이 샌다**
-
-이전 사건의 사실이 남으면 다음 판정이 오염된다. `judge()`가 매 호출마다
-동적 술어 7종을 `retractall`로 비우고 새로 주입한다.
-
-```python
-with _QUERY_LOCK:
-    self._retract_all()        # 이전 사건 흔적 제거
-    for fact in facts:
-        self._pl.assertz(fact)
-    ...
-```
-
-이로써 판정이 **입력 사실만의 함수**가 된다. 이 불변식은 테스트로 고정돼 있어,
-`_retract_all`을 제거하면 즉시 깨진다.
-
-**④ 발동 규칙 회수**
-
-```prolog
-fired(I, R, Sev) :- rule(R, Sev, I).
-```
-
-`fired(current, R, Sev), rule_text(R, D)` 한 번의 질의로 발동한 규칙 ID와
-한국어 설명을 함께 받는다. 이것이 아래 "발동 규칙" 목록의 출처이며,
-`severity/2`는 컷(`!`)으로 HIGH → MEDIUM → LOW 우선순위를 해소한다.
-
-#### 2-Track 아키텍처와의 연결
-
-기존 2-Track 구조(실시간 규칙 → 비동기 LLM Agent)는 그대로 두고, Track 1의
-Decision 노드에 판정 경로 하나를 더한 형태다.
-
-```
-[Track 1 — 실시간]
-Perception → Audio → Analysis → Decision ─────→ Action
-                                   │               │
-                    ┌──────────────┼──────┐        └──→ [Track 2 — 비동기]
-                    │              │      │              EscalationAgent
-              rule/attention      llm  ontology           (119 신고 여부 판단)
-                 (점수)         (점수)  (규칙 ID)                ▲
-                                        │                        │
-                        ontology.ttl ───┤     발동 규칙 목록 ─────┘
-                        rules.pl ───────┤
-                        incidents.db ───┘
-```
-
-Track 1이 확정한 발동 규칙을 Track 2가 입력으로 받는다. 이전에는 점수만
-넘어가서, Track 2의 LLM이 "왜 HIGH인가"를 스스로 되짚어야 했다.
-
-```
-[이전]  - Current severity: HIGH (score: 90)
-
-[지금]  - Current severity: HIGH (score: 90)
-        - Fired rules (symbolic reasoning): r1 (고위험 구역에서 30초 이상 무동작),
-          r5 (취약 계층 + 고위험 구역 + 무동작 15초 이상), ...
-```
-
-특히 `r6`(재낙상)가 걸린 경우, Track 1이 이미 이력을 조회해 판정에 반영했으므로
-Track 2는 `query_incident_history` 도구를 호출할 필요가 없다. 제한된 ReAct 반복
-횟수(기본 4회)를 외부 신고 판단 같은 더 어려운 문제에 쓸 수 있다.
-
-**기호적 추론(Track 1)의 결과가 생성형 판단(Track 2)의 입력이 되는 구조다.**
-규칙이 "무엇이 걸렸는가"를 결정론적으로 확정하고, LLM이 "그래서 어떻게 할
-것인가"를 맡는다. 온톨로지 모드가 아닐 때 `fired_rules`는 빈 목록이며,
-그 경우 프롬프트에 해당 줄이 들어가지 않는다.
-
-#### 개념 계층
-
-```mermaid
-flowchart TD
-    person --> adult
-    response_action --> alert_action
-    high_risk_zone --> balcony
-    wet_area --> bathroom
-    normal_zone --> bedroom
-    vulnerable_person --> child
-    posture --> collapsed
-    audio_event --> distress_sound
-    vulnerable_person --> elderly
-    response_action --> emergency_action
-    normal_zone --> hallway
-    severity --> high
-    zone --> high_risk_zone
-    audio_event --> impact_sound
-    wet_area --> kitchen
-    posture --> leaning
-    normal_zone --> living_room
-    response_action --> log_action
-    severity --> low
-    severity --> medium
-    zone --> normal_zone
-    unclassified_zone --> other_zone
-    unclassified_zone --> outdoor
-    distress_sound --> scream
-    high_risk_zone --> stairs
-    zone --> unclassified_zone
-    person --> unknown_person
-    posture --> upright
-    person --> vulnerable_person
-    high_risk_zone --> wet_area
-```
-
-#### 판정 방식 비교
-
-| | rule | attention | llm | ontology |
-|---|---|---|---|---|
-| 재현성 | 난수로 흔들림 | 있음 | 없음 | 있음 (조건부) |
-| 무동작 시간 반영 | 없음 | 있음 | 있음 | 있음 |
-| 취약 계층 구분 | 노인만 | 노인만 | 프롬프트 의존 | 노인 + 아동 |
-| 시간축(재낙상) 판정 | 불가 | 불가 | 불가 | 가능 |
-| 판단 근거 | 없음 | 모달리티 가중치 | 자연어 | 발동 규칙 ID |
-| 새 구역 추가 | 코드 수정 | 재학습 | 프롬프트 수정 | `is_a` 한 줄 |
-
-> `ontology` 열의 재현성은 조건부입니다. 판정은 입력 사실**과** 저장된 사건 이력 양쪽의
-> 함수이므로, 같은 입력이라도 DB 이력이 다르면 판정이 달라질 수 있습니다(아래 S8이 그 예입니다).
-> 또한 Prolog 엔진 적재에 실패하면 `ontology_fallback` 경로가 `decision_node_rule`을 재사용하므로
-> 그 경우에는 `rule` 열과 같은 난수 지터가 그대로 나타납니다.
-
-> `attention` 모드는 사람이 직접 라벨링한 데이터가 아니라 `agentic/fusion/dataset.py`의
-> 규칙 기반 합성 데이터로 학습됐다. 따라서 이 표에서 `attention` 열을 정답(ground truth)
-> 취급해서는 안 되며, 다른 모드와 동일하게 하나의 판정 방식으로 비교 대상일 뿐이다.
-
-> 아래 표는 `python -m scripts.compare_modes` 가 임시 DB 를 직접 만들어 S8 용 이력 1건
-> (카메라 99, 24시간 전)만 주입한 상태에서 생성했습니다. 프로젝트 루트의 `incidents.db` 는
-> 읽지도 쓰지도 않으므로, 같은 코드로 재실행하면 ontology 열은 같은 값이 나옵니다.
-
-> LLM 열은 호출 비용이 커서 3회만 반복했습니다. 다른 열(30회)과 반복 횟수가 다르므로 동일한 표본 수로 비교하지 마십시오.
-
-| 시나리오 | 상황 | rule | attention | llm | ontology |
-|---|---|---|---|---|---|
-| S1 | 거실, 8초, 성인 | MEDIUM | HIGH | MEDIUM | LOW (점수 없음) |
-| S2 | 화장실, 45초, 노인 | HIGH | HIGH | MEDIUM | HIGH (점수 없음) |
-| S3 | 복도, 12초, 성인, 비명 | HIGH | HIGH | MEDIUM | MEDIUM (점수 없음) |
-| S4 | 계단, 35초, 성인 | **HIGH/MEDIUM** (비결정적) | HIGH | MEDIUM | HIGH (점수 없음) |
-| S5 | 거실, 300초, 성인 | MEDIUM | HIGH | MEDIUM | HIGH (점수 없음) |
-| S6 | 화장실, 20초, 아동 | **HIGH/MEDIUM** (비결정적) | HIGH | MEDIUM | HIGH (점수 없음) |
-| S7 | 경계값 (각도 46, 속도 12, 0초) | **LOW/MEDIUM** (비결정적) | LOW | MEDIUM | LOW (점수 없음) |
-| S8 | 복도, 12초 + 3일 내 재낙상 | MEDIUM | HIGH | MEDIUM | HIGH (점수 없음) |
-| S9 | 붕괴자세 + 충격음 + 25초 | HIGH | HIGH | MEDIUM | HIGH (점수 없음) |
-| S10 | 위험물 + 붕괴자세 | HIGH | MEDIUM | MEDIUM | MEDIUM (점수 없음) |
-
-LLM 모드는 10개 시나리오에 대해 총 30회 호출(시나리오당 3회)됐고, **30회 전부 MEDIUM**을 반환했습니다.
-자체 점수도 좁게 뭉쳤습니다 — `scripts/compare_modes.py` 가 표 아래에 함께 출력하는 분포는
-`LLM 자체 점수 분포 (총 30회 호출): 65점 29회, 73점 1회` 였습니다. 즉 이 표의 `llm` 열은
-"다른 모드와 판정이 엇갈린다"가 아니라 "입력과 무관하게 같은 답을 낸다"로 읽어야 합니다.
-
-`rule` 열의 비결정성(S4, S6, S7)은 `agentic/nodes/decision.py:91`의 `random.randint(-5, 5)`
-지터가 원인이며, S1과 S5가 같은 판정을 받는 것은 같은 파일 78번 줄에서 읽어들인
-`no_movement_seconds`가 이후 어디에도 쓰이지 않기 때문이다. 둘 다 버그이지만
-룰 기반 경로(`decision.py`)를 대조군으로 그대로 남겨두기 위해 의도적으로 고치지 않았다.
-
-이 실험은 "온톨로지 모드가 더 정확하다"를 보여주지 않는다. 프로젝트 안에 라벨링된
-낙상 정답 데이터셋이 없어 정확도 자체를 측정할 방법이 없기 때문이다. 대신 확인된 것은
-① 재현성(난수 없이, 같은 입력 사실과 같은 이력이면 같은 판정), ② 무동작 지속 시간을 실제로 판정에
-반영함, ③ 노인·아동을 함께 취약 계층으로 다룸, ④ 3일 내 재낙상 같은 시간축 정보를
-판정에 사용함(S8), ⑤ 판정 근거를 발동 규칙 ID로 제시할 수 있음(아래 목록) — 이 다섯 가지다.
-
-##### 발동 규칙 (ontology 모드)
-
-- **S1** 거실, 8초, 성인 → **LOW** — 없음
-- **S2** 화장실, 45초, 노인 → **HIGH** — `r1` 고위험 구역에서 30초 이상 무동작, `r5` 취약 계층 + 고위험 구역 + 무동작 15초 이상, `r9` 취약 계층 + 무동작 15초 이상, `r10` 붕괴 자세 + 무동작 10초 이상
-- **S3** 복도, 12초, 성인, 비명 → **MEDIUM** — `r8` 비명 감지, `r10` 붕괴 자세 + 무동작 10초 이상
-- **S4** 계단, 35초, 성인 → **HIGH** — `r1` 고위험 구역에서 30초 이상 무동작, `r10` 붕괴 자세 + 무동작 10초 이상
-- **S5** 거실, 300초, 성인 → **HIGH** — `r3` 무동작 60초 이상, `r10` 붕괴 자세 + 무동작 10초 이상
-- **S6** 화장실, 20초, 아동 → **HIGH** — `r5` 취약 계층 + 고위험 구역 + 무동작 15초 이상, `r7` 고위험 구역에서 10~30초 무동작, `r9` 취약 계층 + 무동작 15초 이상, `r10` 붕괴 자세 + 무동작 10초 이상
-- **S7** 경계값 (각도 46, 속도 12, 0초) → **LOW** — 없음
-- **S8** 복도, 12초 + 3일 내 재낙상 → **HIGH** — `r6` 3일 내 동일 구역 재낙상(5분 이상 경과) + 무동작 10초 이상, `r10` 붕괴 자세 + 무동작 10초 이상, `r13` 3일 내 동일 구역 재낙상(5분 이상 경과)
-- **S9** 붕괴자세 + 충격음 + 25초 → **HIGH** — `r4` 붕괴 자세 + 충격음 + 무동작 20초 이상, `r10` 붕괴 자세 + 무동작 10초 이상, `r11` 충격음 + 붕괴 자세
-- **S10** 위험물 + 붕괴자세 → **MEDIUM** — `r12` 주변 위험물 + 붕괴 자세
-
-#### 실행
-
-```bash
-# SWI-Prolog 설치 (최초 1회)
-sudo apt-get install -y swi-prolog-nox
-pip install pyswip rdflib
-
-# 온톨로지 → Prolog 사실 재생성 (ontology.ttl 수정 시)
-python -m agentic.ontology.schema
-
-# 4개 모드 비교 실험 (임시 DB 를 스스로 만들어 쓰므로 incidents.db 를 건드리지 않는다)
-python -m scripts.compare_modes
-
-# 영상 처리에 온톨로지 모드 적용
-python main_agentic.py --video input/sample.mp4 --skip-vlm --skip-audio --decision-mode ontology
-```
-
----
-
-## ✨ 향후 발전 가능성 (Future Work)
-
-### Multi-Agent 오케스트레이터 (Phase 2)
-- **현재 상태:** 단일 EscalationAgent가 이력 조회, 상황 분석, 에스컬레이션 판단을 모두 수행
-- **발전 계획:** 역할별로 HistoryAgent(패턴 분석), SituationAgent(VLM 재분석), DecisionAgent(최종 판단)로 분리. LangGraph `fan-out → fan-in`으로 병렬 실행 + 조건부 루프
-
-### Persistent Memory 도입
-- **현재 상태:** 인시던트와 Agent 결과가 DB에 기록되지만 판단에 자동 활용되지 않음
-- **발전 계획:** 과거 낙상 이력을 바탕으로 구역별 오탐/미탐 패턴을 학습하여 판단 기준을 자동 조정. (예: "3층 복도는 오탐이 잦으니 임계치 상향", "7층 병실은 놓친 사례가 있으니 민감도 상향")
-
-### 웨어러블 센서 연동 (Wearable Sensor Integration)
-- **현재 상태:** 비전(YOLO11n) + 오디오(YAMNet) + VLM(Florence-2)의 Attention-based Multimodal Fusion 구현 완료
-- **발전 계획:** **`WearableNode`(스마트워치 자이로스코프 이상 수치 연동)** 를 파이프라인에 추가. 영상·소리·생체 신호 4종 멀티모달 교차 검증, Attention Fusion에 4번째 모달리티로 자연스럽게 확장 가능
-
----
-
-
-<div align="center">
-
-**Made for safety monitoring**
-
-</div>
-
+- **Multi-Agent 오케스트레이터** — 단일 EscalationAgent를 HistoryAgent /
+  SituationAgent / DecisionAgent로 분리, LangGraph fan-out → fan-in 병렬 실행
+- **track_id 기반 사건 동일성 판별** — 현재는 재검출과 재낙상을 시간 간격(5분)으로
+  구분한다. 동일 인물의 연속 이벤트를 묶으면 이 하한이 불필요해진다
+- **온톨로지 일관성 검증** — `owl:disjointWith` 선언과 위반 검사 추가
+- **Persistent Memory** — 인시던트 이력을 Agent 판단에 자동 반영
