@@ -25,6 +25,10 @@ python-dotenv        # .env 환경변수 로드
 # ── LLM Agent (Decision Node) ──────────────────────────────────────
 ollama               # Ollama 로컬 LLM 클라이언트
 
+
+# ── Ontology / Symbolic Reasoning ──────────────────────────────────────
+rdflib               # RDF/OWL 온톨로지 파싱 (개념 계층 정본)
+pyswip               # SWI-Prolog 바인딩 (규칙 추론 엔진)
 # ── Utilities ───────────────────────────────────────────────────────
 numpy                # 수치 연산
 requests             # Slack Webhook HTTP 요청 (선택)
