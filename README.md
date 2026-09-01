@@ -327,6 +327,10 @@ ollama pull llama3.2
 python3 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
+# 시스템 패키지 설치 (온톨로지 모드에 필요)
+# 없어도 나머지는 동작하지만, 온톨로지 모드가 조용히 룰 기반으로 폴백한다
+sudo apt-get install -y swi-prolog-nox
+
 # 의존성 설치
 pip install -r requirements.txt
 

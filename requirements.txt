@@ -29,6 +29,9 @@ ollama               # Ollama 로컬 LLM 클라이언트
 # ── Ontology / Symbolic Reasoning ──────────────────────────────────────
 rdflib               # RDF/OWL 온톨로지 파싱 (개념 계층 정본)
 pyswip               # SWI-Prolog 바인딩 (규칙 추론 엔진)
+#                      ※ 시스템 패키지가 따로 필요하다:
+#                        sudo apt-get install -y swi-prolog-nox
+#                        없으면 온톨로지 모드가 룰 기반으로 폴백한다
 # ── Utilities ───────────────────────────────────────────────────────
 numpy                # 수치 연산
 requests             # Slack Webhook HTTP 요청 (선택)
