@@ -30,6 +30,10 @@ class AgentState(TypedDict):
 
     # Decision Mode
     use_llm_decision: bool  # True: LLM Agent 판단, False: 룰 기반 (기본)
+    decision_mode: str      # "auto" | "rule" | "llm" | "ontology" (없으면 auto)
+
+    # Decision Node — 온톨로지 모드에서만 채워짐
+    fired_rules: list[dict]  # [{"rule_id","severity","description"}, ...]
 
     # Camera
     camera_id: str
