@@ -287,3 +287,46 @@ class TestUnclassifiedZone:
         ])
         assert [r.rule_id for r in j.fired_rules] == []
         assert j.severity == "LOW"
+
+
+class TestTemporalRules:
+    def setup_method(self):
+        self.engine = PrologEngine()
+
+    def test_r13_fires_on_repeat_incident(self):
+        j = self.engine.judge([
+            "occurred_in(current, hallway)",
+            "no_movement_duration(current, 2)",
+            "prior_incident('INC-A', '01', 2)",
+        ])
+        assert j.severity == "MEDIUM"
+        assert "r13" in [r.rule_id for r in j.fired_rules]
+
+    def test_r6_escalates_repeat_with_immobility(self):
+        j = self.engine.judge([
+            "occurred_in(current, hallway)",
+            "no_movement_duration(current, 12)",
+            "prior_incident('INC-A', '01', 1)",
+        ])
+        assert j.severity == "HIGH"
+        assert "r6" in [r.rule_id for r in j.fired_rules]
+
+    def test_without_history_same_facts_stay_low(self):
+        """이력이 없으면 동일 상황이 LOW 다. 이 대비가 시간축 추론의 증거다."""
+        j = self.engine.judge([
+            "occurred_in(current, hallway)",
+            "no_movement_duration(current, 2)",
+        ])
+        assert j.severity == "LOW"
+
+    def test_history_does_not_leak_between_judgements(self):
+        self.engine.judge([
+            "occurred_in(current, hallway)",
+            "no_movement_duration(current, 2)",
+            "prior_incident('INC-A', '01', 1)",
+        ])
+        j = self.engine.judge([
+            "occurred_in(current, hallway)",
+            "no_movement_duration(current, 2)",
+        ])
+        assert j.severity == "LOW", "이전 판정의 이력 사실이 남아 있음"

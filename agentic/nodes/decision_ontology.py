@@ -10,8 +10,12 @@ from dataclasses import asdict
 
 from agentic.ontology.engine import get_engine
 from agentic.ontology.facts import state_to_facts
+from agentic.ontology.history import history_facts
 
 SEVERITY_SCORE = {"LOW": 25, "MEDIUM": 60, "HIGH": 90}
+
+DB_PATH = "incidents.db"
+HISTORY_WINDOW_DAYS = 3
 
 
 def decision_node_ontology(state: dict) -> dict:
@@ -19,6 +23,11 @@ def decision_node_ontology(state: dict) -> dict:
     try:
         engine = get_engine()
         facts = state_to_facts(state)
+        facts += history_facts(
+            DB_PATH,
+            state.get("camera_id", "01"),
+            within_days=HISTORY_WINDOW_DAYS,
+        )
         judgement = engine.judge(facts)
     except Exception as e:  # noqa: BLE001 — 파이프라인을 멈추지 않는다
         print(f"[DecisionOntology] Prolog 엔진 실패, 룰 기반 폴백: {e}")

@@ -3,6 +3,14 @@ import pytest
 from agentic.nodes.decision_ontology import SEVERITY_SCORE, decision_node_ontology
 
 
+@pytest.fixture(autouse=True)
+def isolate_db(tmp_path, monkeypatch):
+    """판정 테스트가 로컬 incidents.db 상태에 영향받지 않게 한다."""
+    import agentic.nodes.decision_ontology as mod
+
+    monkeypatch.setattr(mod, "DB_PATH", str(tmp_path / "empty.db"))
+
+
 class TestDecisionNodeOntology:
     def _base_state(self, **overrides):
         state = {
@@ -97,3 +105,28 @@ class TestFallback:
         assert r["severity"] in ("LOW", "MEDIUM", "HIGH")
         assert r["decision_mode"] == "ontology_fallback"
         assert r["fired_rules"] == []
+
+
+class TestNodeUsesHistory:
+    def test_node_passes_camera_id_to_history(self, monkeypatch):
+        import agentic.nodes.decision_ontology as mod
+
+        seen = {}
+
+        def fake_history(db_path, camera_id, within_days=3):
+            seen["camera_id"] = camera_id
+            return ["prior_incident('INC-A', '07', 1)"]
+
+        monkeypatch.setattr(mod, "history_facts", fake_history)
+
+        r = mod.decision_node_ontology({
+            "no_movement_seconds": 12.0,
+            "estimated_age": "adult",
+            "location_type": "hallway",
+            "hazards_detected": [],
+            "pose_data": {"angle": 30, "velocity": 0},
+            "camera_id": "07",
+        })
+        assert seen["camera_id"] == "07"
+        assert r["severity"] == "HIGH"
+        assert "r6" in [x["rule_id"] for x in r["fired_rules"]]

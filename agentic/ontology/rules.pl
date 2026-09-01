@@ -16,6 +16,7 @@
 :- dynamic prior_incident/3.
 
 :- discontiguous rule/3.
+:- discontiguous rule_text/2.
 
 % ------------------------------------------------------------
 %  파생 술어
@@ -92,6 +93,19 @@ rule_text(r10, '붕괴 자세 + 무동작 10초 이상').
 rule_text(r11, '충격음 + 붕괴 자세').
 rule_text(r12, '주변 위험물 + 붕괴 자세').
 
+% 시간축 규칙
+% history.py 가 동일 카메라(=동일 구역) 이력만 주입하므로,
+% prior_incident/3 의 존재 자체가 '같은 구역 재낙상' 을 뜻한다.
+rule(r6, high, I) :-
+    prior_incident(_, _, _),
+    no_movement_duration(I, S), S >= 10.
+
+rule(r13, medium, _) :-
+    prior_incident(_, _, _).
+
+rule_text(r6,  '3일 내 동일 구역 재낙상 + 무동작 10초 이상').
+rule_text(r13, '3일 내 동일 구역 재낙상').
+
 % ------------------------------------------------------------
 %  최종 심각도 — 발동한 규칙 중 가장 높은 등급
 % ------------------------------------------------------------
@@ -99,7 +113,7 @@ fired(I, R, Sev) :- rule(R, Sev, I).
 
 severity(I, high)   :- fired(I, _, high), !.
 severity(I, medium) :- fired(I, _, medium), !.
-severity(I, low).
+severity(_, low).
 
 % ------------------------------------------------------------
 %  대응 액션 (설계 문서의 r14 / r15 / r16)
