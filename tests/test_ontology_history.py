@@ -63,10 +63,16 @@ class TestHistoryFacts:
     def test_generates_prior_incident_fact(self):
         _insert(self.db, "INC-A", "01", self.now - timedelta(days=2))
         facts = history_facts(self.db, "01", within_days=3, now=self.now)
-        assert facts == ["prior_incident('INC-A', '01', 2)"]
+        assert facts == ["prior_incident('INC-A', '01', 2880)"]
 
-    def test_same_day_is_zero_days_ago(self):
+    def test_elapsed_is_reported_in_minutes(self):
         _insert(self.db, "INC-A", "01", self.now - timedelta(hours=3))
+        facts = history_facts(self.db, "01", within_days=3, now=self.now)
+        assert facts == ["prior_incident('INC-A', '01', 180)"]
+
+    def test_seconds_old_incident_is_under_the_thirty_minute_floor(self):
+        """방금 기록된 같은 낙상의 재검출은 rules.pl 의 30분 하한에 못 미쳐야 한다."""
+        _insert(self.db, "INC-A", "01", self.now - timedelta(seconds=20))
         facts = history_facts(self.db, "01", within_days=3, now=self.now)
         assert facts == ["prior_incident('INC-A', '01', 0)"]
 

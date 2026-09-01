@@ -24,10 +24,14 @@ def history_facts(
     """
     최근 N일 동일 카메라 이력 → prior_incident/3 사실 목록.
 
-    생성 형식: prior_incident(PriorId, CameraId, DaysAgo)
-      - PriorId  : 과거 사건의 incident_id (인용 아톰)
-      - CameraId : 카메라 식별자 (인용 아톰)
-      - DaysAgo  : 경과 일수 (정수, 0 = 당일)
+    생성 형식: prior_incident(PriorId, CameraId, MinutesAgo)
+      - PriorId    : 과거 사건의 incident_id (인용 아톰)
+      - CameraId   : 카메라 식별자 (인용 아톰)
+      - MinutesAgo : 경과 분 (정수, 내림)
+
+    경과 시간을 분 단위로 싣는 이유는 rules.pl 의 시간축 규칙(r6/r13)이
+    '같은 낙상의 재검출'과 '진짜 재낙상'을 구분해야 하기 때문이다.
+    일 단위로는 당일 재낙상과 몇 초 전 재검출이 똑같이 0 이 되어 구분할 수 없다.
 
     DB 조회에 실패해도 빈 목록을 반환한다. 이력이 없다고 판정이 멈추면 안 된다.
     """
@@ -45,9 +49,9 @@ def history_facts(
             when = datetime.fromisoformat(row["timestamp"])
         except (ValueError, TypeError):
             continue
-        days_ago = (now - when).days
+        minutes_ago = int((now - when).total_seconds() // 60)
         facts.append(
             f"prior_incident({quote_atom(row['incident_id'])}, "
-            f"{quote_atom(camera_id)}, {days_ago})"
+            f"{quote_atom(camera_id)}, {minutes_ago})"
         )
     return facts

@@ -5,18 +5,36 @@
 
 기존 rule 경로의 난수 때문에 재현성 측정은 각 시나리오를 10회 반복한다.
 LLM 모드는 Ollama 가 떠 있어야 하며, 없으면 해당 열을 '실행 불가' 로 표시한다.
-"""
-import os
-import statistics
-import time
 
+ontology 모드는 판정에 과거 사건 이력을 사용하므로, 이 스크립트는 임시 DB 를
+직접 만들어 S8 이 필요로 하는 이력 1건만 주입한다. 프로젝트 루트의
+`incidents.db` 는 읽지도 쓰지도 않는다 — 그래야 표가 실행 환경이 아니라
+코드만의 함수가 된다.
+"""
+import collections
+import contextlib
+import os
+import shutil
+import sqlite3
+import statistics
+import tempfile
+import time
+from datetime import datetime, timedelta
+
+from agentic.nodes import decision_ontology
 from agentic.nodes.decision import decision_node_attention, decision_node_rule
 from agentic.nodes.decision_llm import decision_node_llm
 from agentic.nodes.decision_ontology import decision_node_ontology
+from agentic.tools.db import init_db
 
 REPEATS = 30
 LLM_REPEATS = 3
 OUT_PATH = os.path.join("docs", "comparison_results.md")
+
+# S8 이 재낙상으로 판정되려면 필요한 이력. 하루 전으로 잡아
+# rules.pl r6/r13 의 30분 하한을 여유 있게 넘긴다.
+HISTORY_CAMERA = "99"
+HISTORY_AGE = timedelta(days=1)
 
 
 def _state(**overrides) -> dict:
@@ -70,6 +88,39 @@ SCENARIOS = [
 ]
 
 
+@contextlib.contextmanager
+def _seeded_history_db():
+    """
+    S8 용 이력 1건만 담은 임시 DB 를 만들고 온톨로지 노드가 그것을 보게 한다.
+
+    실제 `incidents.db` 를 건드리지 않으므로, 이 스크립트의 출력은 누가 어디서
+    돌리든 같다.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="compare_modes_")
+    db_path = os.path.join(tmpdir, "compare_modes.db")
+    init_db(db_path)
+
+    when = datetime.now() - HISTORY_AGE
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO incidents (incident_id, camera_id, timestamp, severity, "
+            "severity_score, scene_description, actions_taken) VALUES (?,?,?,?,?,?,?)",
+            ("INC-SEED-S8", HISTORY_CAMERA, when.isoformat(), "MEDIUM", 60, "", "[]"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    original = decision_ontology.DB_PATH
+    decision_ontology.DB_PATH = db_path
+    try:
+        yield db_path
+    finally:
+        decision_ontology.DB_PATH = original
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def _llm_available() -> bool:
     try:
         import ollama
@@ -81,7 +132,7 @@ def _llm_available() -> bool:
 
 
 def _run(fn, state: dict, repeats: int = REPEATS) -> dict:
-    """한 모드를 repeats 회 실행하고 판정 집합과 평균 지연을 모은다."""
+    """한 모드를 repeats 회 실행하고 판정 집합·점수 분포·평균 지연을 모은다."""
     severities, scores, elapsed = [], [], []
     for _ in range(repeats):
         t = time.perf_counter()
@@ -89,13 +140,13 @@ def _run(fn, state: dict, repeats: int = REPEATS) -> dict:
             r = fn(dict(state))
         except Exception as e:  # noqa: BLE001
             return {"severities": {f"ERROR: {type(e).__name__}"},
-                    "scores": set(), "ms": 0.0}
+                    "scores": collections.Counter(), "ms": 0.0}
         elapsed.append((time.perf_counter() - t) * 1000)
         severities.append(r.get("severity"))
         scores.append(r.get("severity_score"))
     return {
         "severities": set(severities),
-        "scores": set(scores),
+        "scores": collections.Counter(scores),
         "ms": statistics.mean(elapsed) if elapsed else 0.0,
     }
 
@@ -111,6 +162,13 @@ def main() -> None:
         modes.insert(2, ("llm", decision_node_llm))
 
     lines = ["# 판정 모드 비교 실험 결과", ""]
+    lines += [
+        "> 이 표는 코드만의 함수입니다. ontology 열이 쓰는 사건 이력은 스크립트가 "
+        f"임시 DB 에 직접 주입한 1건(카메라 {HISTORY_CAMERA}, "
+        f"{int(HISTORY_AGE.total_seconds() // 3600)}시간 전)뿐이며, "
+        "프로젝트 루트의 `incidents.db` 는 읽지도 쓰지도 않습니다.",
+        "",
+    ]
     if not llm_ok:
         lines += ["> LLM 모드는 Ollama 미실행으로 제외했습니다.", ""]
     if llm_ok:
@@ -124,27 +182,42 @@ def main() -> None:
     header = "| 시나리오 | 상황 | " + " | ".join(n for n, _ in modes) + " |"
     lines += [header, "|" + "---|" * (len(modes) + 2)]
 
-    for sc in SCENARIOS:
-        cells = []
-        for name, fn in modes:
-            repeats = LLM_REPEATS if name == "llm" else REPEATS
-            res = _run(fn, sc["state"], repeats=repeats)
-            sev = "/".join(sorted(res["severities"]))
-            if name == "ontology":
-                cells.append(f"{sev} (점수 없음)")
-            elif len(res["severities"]) > 1:
-                cells.append(f"**{sev}** (비결정적)")
-            else:
-                cells.append(sev)
-        lines.append(f"| {sc['id']} | {sc['desc']} | " + " | ".join(cells) + " |")
+    llm_scores: collections.Counter = collections.Counter()
 
-    lines += ["", "## 발동 규칙 (ontology 모드)", ""]
-    for sc in SCENARIOS:
-        r = decision_node_ontology(dict(sc["state"]))
-        rules = ", ".join(
-            f"`{x['rule_id']}` {x['description']}" for x in r["fired_rules"]
-        ) or "없음"
-        lines.append(f"- **{sc['id']}** {sc['desc']} → **{r['severity']}** — {rules}")
+    with _seeded_history_db():
+        for sc in SCENARIOS:
+            cells = []
+            for name, fn in modes:
+                repeats = LLM_REPEATS if name == "llm" else REPEATS
+                res = _run(fn, sc["state"], repeats=repeats)
+                if name == "llm":
+                    llm_scores.update(res["scores"])
+                sev = "/".join(sorted(res["severities"]))
+                if name == "ontology":
+                    cells.append(f"{sev} (점수 없음)")
+                elif len(res["severities"]) > 1:
+                    cells.append(f"**{sev}** (비결정적)")
+                else:
+                    cells.append(sev)
+            lines.append(f"| {sc['id']} | {sc['desc']} | " + " | ".join(cells) + " |")
+
+        if llm_ok and llm_scores:
+            total = sum(llm_scores.values())
+            dist = ", ".join(
+                f"{score}점 {n}회" for score, n in sorted(llm_scores.items())
+            )
+            lines += [
+                "",
+                f"LLM 자체 점수 분포 (총 {total}회 호출): {dist}",
+            ]
+
+        lines += ["", "## 발동 규칙 (ontology 모드)", ""]
+        for sc in SCENARIOS:
+            r = decision_node_ontology(dict(sc["state"]))
+            rules = ", ".join(
+                f"`{x['rule_id']}` {x['description']}" for x in r["fired_rules"]
+            ) or "없음"
+            lines.append(f"- **{sc['id']}** {sc['desc']} → **{r['severity']}** — {rules}")
 
     text = "\n".join(lines) + "\n"
     os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)

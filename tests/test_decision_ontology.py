@@ -115,7 +115,7 @@ class TestNodeUsesHistory:
 
         def fake_history(db_path, camera_id, within_days=3):
             seen["camera_id"] = camera_id
-            return ["prior_incident('INC-A', '07', 1)"]
+            return ["prior_incident('INC-A', '07', 1440)"]
 
         monkeypatch.setattr(mod, "history_facts", fake_history)
 

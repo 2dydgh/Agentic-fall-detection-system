@@ -96,15 +96,18 @@ rule_text(r12, '주변 위험물 + 붕괴 자세').
 % 시간축 규칙
 % history.py 가 동일 카메라(=동일 구역) 이력만 주입하므로,
 % prior_incident/3 의 존재 자체가 '같은 구역 재낙상' 을 뜻한다.
+% 30분 하한을 두는 이유: ActionNode 가 LOW 를 포함한 모든 판정을 DB 에 기록하고
+% PerceptionNode 가 같은 낙상의 재검출을 허용하므로, 하한이 없으면 사건 1건이
+% 몇 초 전의 자기 자신을 '재낙상' 근거로 삼아 스스로를 승격시킨다.
 rule(r6, high, I) :-
-    prior_incident(_, _, _),
+    prior_incident(_, _, M), M >= 30,
     no_movement_duration(I, S), S >= 10.
 
 rule(r13, medium, _) :-
-    prior_incident(_, _, _).
+    prior_incident(_, _, M), M >= 30.
 
-rule_text(r6,  '3일 내 동일 구역 재낙상 + 무동작 10초 이상').
-rule_text(r13, '3일 내 동일 구역 재낙상').
+rule_text(r6,  '3일 내 동일 구역 재낙상(30분 이상 경과) + 무동작 10초 이상').
+rule_text(r13, '3일 내 동일 구역 재낙상(30분 이상 경과)').
 
 % ------------------------------------------------------------
 %  최종 심각도 — 발동한 규칙 중 가장 높은 등급

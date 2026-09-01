@@ -30,6 +30,12 @@ _DYNAMIC_PREDICATES = [
 
 _SEVERITY_UP = {"high": "HIGH", "medium": "MEDIUM", "low": "LOW"}
 
+# 모든 인스턴스가 공유하는 질의 락. 인스턴스별 락으로는 부족하다 —
+# pyswip 의 Prolog 는 이 버전에서 클래스 레벨 API 라(assertz/query/consult 가
+# classmethod, 질의 열림 플래그가 클래스 속성 _queryIsOpen) 인스턴스가 둘이면
+# SWI 엔진뿐 아니라 pyswip 의 질의 상태까지 공유하기 때문이다.
+_QUERY_LOCK = threading.Lock()
+
 
 @dataclass
 class FiredRule:
@@ -47,12 +53,17 @@ class Judgement:
 
 
 class PrologEngine:
-    """규칙 파일과 온톨로지 사실을 적재한 Prolog 엔진."""
+    """
+    규칙 파일과 온톨로지 사실을 적재한 Prolog 엔진.
+
+    판정은 모듈 전역 `_QUERY_LOCK` 으로 직렬화한다. 인스턴스가 여럿 생겨도
+    (테스트가 실제로 그렇게 한다) 뒤에 있는 SWI 엔진과 pyswip 의 질의 상태는
+    하나뿐이므로, 락을 인스턴스에 두면 아무것도 지키지 못한다.
+    """
 
     def __init__(self, rules_path: str = RULES_PL, ontology_path: str = GENERATED_PL):
         from pyswip import Prolog
 
-        self._lock = threading.Lock()
         self._pl = Prolog()
         # 온톨로지 사실을 먼저 적재해야 rules.pl 의 kind_of/2 가 참조할 수 있다
         self._pl.consult(ontology_path.replace("\\", "/"))
@@ -110,7 +121,7 @@ class PrologEngine:
         Returns:
             Judgement (severity 는 대문자)
         """
-        with self._lock:
+        with _QUERY_LOCK:
             self._retract_all()
             for fact in facts:
                 self._pl.assertz(fact)

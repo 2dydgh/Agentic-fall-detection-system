@@ -17,7 +17,19 @@ def main():
     parser.add_argument("--skip-vlm", action="store_true", help="Skip VLM analysis for faster processing")
     parser.add_argument("--skip-audio", action="store_true", help="Skip audio analysis")
     parser.add_argument("--agent-mode", action="store_true", help="Use LLM agent for decision (requires Ollama)")
+    parser.add_argument(
+        "--decision-mode",
+        choices=["auto", "rule", "llm", "ontology"],
+        default="auto",
+        help="Decision node to use (default: auto — attention fusion if available, else rule). "
+             "--agent-mode implies llm unless this flag names another mode.",
+    )
     args = parser.parse_args()
+
+    # 기존 --agent-mode 동작 보존: 플래그를 명시하지 않으면 agent-mode 가 llm 을 고른다
+    decision_mode = args.decision_mode
+    if decision_mode == "auto" and args.agent_mode:
+        decision_mode = "llm"
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -39,6 +51,7 @@ def main():
     print(f"   - 모델: {model_path}")
     print(f"   - VLM: {'OFF' if args.skip_vlm else 'ON'}")
     print(f"   - Agent Mode: {'ON (LLM)' if args.agent_mode else 'OFF (Rule)'}")
+    print(f"   - Decision Mode: {decision_mode}")
 
     graph = create_fall_detection_graph(
         model_path=model_path,
@@ -97,6 +110,7 @@ def main():
         "snapshot_path": None,
         # Decision Mode
         "use_llm_decision": args.agent_mode,
+        "decision_mode": decision_mode,
         # Audio
         "audio_chunk": None,
         "audio_scream_detected": False,
