@@ -41,6 +41,57 @@ rule(r1, high, I) :-
 
 rule_text(r1, '고위험 구역에서 30초 이상 무동작').
 
+rule(r2, high, I) :-
+    is_vulnerable(I),
+    has_audio_event(I, scream).
+
+rule(r3, high, I) :-
+    no_movement_duration(I, S), S >= 60.
+
+rule(r4, high, I) :-
+    has_posture(I, collapsed),
+    has_audio_event(I, impact_sound),
+    no_movement_duration(I, S), S >= 20.
+
+rule(r5, high, I) :-
+    is_vulnerable(I),
+    in_zone(I, high_risk_zone),
+    no_movement_duration(I, S), S >= 15.
+
+rule(r7, medium, I) :-
+    in_zone(I, high_risk_zone),
+    no_movement_duration(I, S), S >= 10, S < 30.
+
+rule(r8, medium, I) :-
+    has_audio_event(I, scream).
+
+rule(r9, medium, I) :-
+    is_vulnerable(I),
+    no_movement_duration(I, S), S >= 15.
+
+rule(r10, medium, I) :-
+    has_posture(I, collapsed),
+    no_movement_duration(I, S), S >= 10.
+
+rule(r11, medium, I) :-
+    has_audio_event(I, impact_sound),
+    has_posture(I, collapsed).
+
+rule(r12, medium, I) :-
+    has_hazard(I, _),
+    has_posture(I, collapsed).
+
+rule_text(r2,  '취약 계층(노인/아동) + 비명 감지').
+rule_text(r3,  '무동작 60초 이상').
+rule_text(r4,  '붕괴 자세 + 충격음 + 무동작 20초 이상').
+rule_text(r5,  '취약 계층 + 고위험 구역 + 무동작 15초 이상').
+rule_text(r7,  '고위험 구역에서 10~30초 무동작').
+rule_text(r8,  '비명 감지').
+rule_text(r9,  '취약 계층 + 무동작 15초 이상').
+rule_text(r10, '붕괴 자세 + 무동작 10초 이상').
+rule_text(r11, '충격음 + 붕괴 자세').
+rule_text(r12, '주변 위험물 + 붕괴 자세').
+
 % ------------------------------------------------------------
 %  최종 심각도 — 발동한 규칙 중 가장 높은 등급
 % ------------------------------------------------------------
