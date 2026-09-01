@@ -36,7 +36,7 @@ def posture_of(angle: float) -> str:
     return "upright"
 
 
-def _quote(text: str) -> str:
+def quote_atom(text: str) -> str:
     """임의 문자열을 Prolog 인용 아톰으로 만든다."""
     escaped = str(text).replace("'", "''")
     return f"'{escaped}'"
@@ -74,6 +74,6 @@ def state_to_facts(state: dict, incident_id: str = "current") -> list[str]:
         facts.append(f"has_audio_event({inc}, impact_sound)")
 
     for hazard in state.get("hazards_detected") or []:
-        facts.append(f"has_hazard({inc}, {_quote(hazard)})")
+        facts.append(f"has_hazard({inc}, {quote_atom(hazard)})")
 
     return facts
