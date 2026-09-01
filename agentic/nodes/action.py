@@ -115,6 +115,9 @@ class ActionNode:
                 "audio_scream_detected": state.get("audio_scream_detected", False),
                 "audio_impact_detected": state.get("audio_impact_detected", False),
                 "no_movement_seconds": state.get("no_movement_seconds", 0),
+                # 온톨로지 모드에서만 채워진다. Track 2 는 이 목록으로 "왜 이 판정인가"를
+                # 알고 시작하므로, 같은 정보를 도구 호출로 다시 찾을 필요가 없다.
+                "fired_rules": state.get("fired_rules", []),
             })
             actions_taken.append({"tool": "async_agent_dispatched"})
 

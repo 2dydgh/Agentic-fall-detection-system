@@ -229,10 +229,20 @@ class EscalationAgent:
         )
         system_msg = SYSTEM_PROMPT.format(tool_descriptions=tool_descriptions)
 
+        # 온톨로지 모드가 판정 근거로 남긴 규칙 목록. 다른 판정 모드에서는 비어 있다.
+        fired = context.get("fired_rules") or []
+        if fired:
+            rules_line = "- Fired rules (symbolic reasoning): " + ", ".join(
+                f"{r.get('rule_id')} ({r.get('description')})" for r in fired
+            ) + "\n"
+        else:
+            rules_line = ""
+
         user_msg = (
             f"Fall incident detected. Here is the context:\n"
             f"- Incident ID: {context['incident_id']}\n"
             f"- Current severity: {context['severity']} (score: {context['severity_score']})\n"
+            f"{rules_line}"
             f"- Scene: {context.get('scene_description', 'N/A')}\n"
             f"- Age group: {context.get('estimated_age', 'unknown')}\n"
             f"- Location: {context.get('location_type', 'unknown')}\n"

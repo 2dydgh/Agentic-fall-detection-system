@@ -676,6 +676,45 @@ fired(I, R, Sev) :- rule(R, Sev, I).
 한국어 설명을 함께 받는다. 이것이 아래 "발동 규칙" 목록의 출처이며,
 `severity/2`는 컷(`!`)으로 HIGH → MEDIUM → LOW 우선순위를 해소한다.
 
+#### 2-Track 아키텍처와의 연결
+
+기존 2-Track 구조(실시간 규칙 → 비동기 LLM Agent)는 그대로 두고, Track 1의
+Decision 노드에 판정 경로 하나를 더한 형태다.
+
+```
+[Track 1 — 실시간]
+Perception → Audio → Analysis → Decision ─────→ Action
+                                   │               │
+                    ┌──────────────┼──────┐        └──→ [Track 2 — 비동기]
+                    │              │      │              EscalationAgent
+              rule/attention      llm  ontology           (119 신고 여부 판단)
+                 (점수)         (점수)  (규칙 ID)                ▲
+                                        │                        │
+                        ontology.ttl ───┤     발동 규칙 목록 ─────┘
+                        rules.pl ───────┤
+                        incidents.db ───┘
+```
+
+Track 1이 확정한 발동 규칙을 Track 2가 입력으로 받는다. 이전에는 점수만
+넘어가서, Track 2의 LLM이 "왜 HIGH인가"를 스스로 되짚어야 했다.
+
+```
+[이전]  - Current severity: HIGH (score: 90)
+
+[지금]  - Current severity: HIGH (score: 90)
+        - Fired rules (symbolic reasoning): r1 (고위험 구역에서 30초 이상 무동작),
+          r5 (취약 계층 + 고위험 구역 + 무동작 15초 이상), ...
+```
+
+특히 `r6`(재낙상)가 걸린 경우, Track 1이 이미 이력을 조회해 판정에 반영했으므로
+Track 2는 `query_incident_history` 도구를 호출할 필요가 없다. 제한된 ReAct 반복
+횟수(기본 4회)를 외부 신고 판단 같은 더 어려운 문제에 쓸 수 있다.
+
+**기호적 추론(Track 1)의 결과가 생성형 판단(Track 2)의 입력이 되는 구조다.**
+규칙이 "무엇이 걸렸는가"를 결정론적으로 확정하고, LLM이 "그래서 어떻게 할
+것인가"를 맡는다. 온톨로지 모드가 아닐 때 `fired_rules`는 빈 목록이며,
+그 경우 프롬프트에 해당 줄이 들어가지 않는다.
+
 #### 개념 계층
 
 ```mermaid
