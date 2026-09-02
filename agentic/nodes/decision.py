@@ -52,11 +52,21 @@ def decision_node_attention(state: dict) -> dict:
         actions.append("send_email_alert")
         actions.append("generate_report")
 
+    # 모달리티별 importance (column mean)
+    importance = attn.mean(axis=0)
+    attn_dict = {
+        "pose": round(float(importance[0]), 4),
+        "audio": round(float(importance[1]), 4),
+        "vlm": round(float(importance[2]), 4),
+    }
+
     return {
         "severity": severity,
         "severity_score": total_score,
         "recommended_actions": actions,
         "auto_action_required": severity == "HIGH",
+        "attention_weights": attn_dict,
+        "decision_mode": "attention",
     }
 
 
@@ -125,6 +135,8 @@ def decision_node_rule(state: dict) -> dict:
         "severity_score": total_score,
         "recommended_actions": actions,
         "auto_action_required": severity == "HIGH",
+        "attention_weights": None,
+        "decision_mode": "rule",
     }
 
 

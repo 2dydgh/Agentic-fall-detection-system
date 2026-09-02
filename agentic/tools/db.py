@@ -33,6 +33,14 @@ def init_db(db_path: str = "incidents.db"):
         conn.execute(
             "ALTER TABLE incidents ADD COLUMN location_type TEXT DEFAULT 'other'"
         )
+    if "attention_weights" not in columns:
+        conn.execute(
+            "ALTER TABLE incidents ADD COLUMN attention_weights TEXT DEFAULT NULL"
+        )
+    if "decision_mode" not in columns:
+        conn.execute(
+            "ALTER TABLE incidents ADD COLUMN decision_mode TEXT DEFAULT 'rule'"
+        )
     conn.commit()
     conn.close()
 
@@ -47,6 +55,8 @@ def log_to_db(
     audio_confidence: float = 0.0,
     camera_id: str = "01",
     location_type: str = "other",
+    attention_weights: dict | None = None,
+    decision_mode: str = "rule",
 ) -> str:
     """이벤트를 DB에 저장하고 incident_id 반환"""
     now = datetime.now()
@@ -55,8 +65,8 @@ def log_to_db(
 
     conn = sqlite3.connect(db_path)
     conn.execute("""
-        INSERT INTO incidents (incident_id, camera_id, timestamp, severity, severity_score, scene_description, actions_taken, audio_scream_detected, audio_impact_detected, audio_confidence, location_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO incidents (incident_id, camera_id, timestamp, severity, severity_score, scene_description, actions_taken, audio_scream_detected, audio_impact_detected, audio_confidence, location_type, attention_weights, decision_mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         incident_id,
         camera_id,
@@ -69,6 +79,8 @@ def log_to_db(
         int(audio_impact_detected),
         audio_confidence,
         location_type,
+        json.dumps(attention_weights) if attention_weights else None,
+        decision_mode,
     ))
     conn.commit()
     conn.close()

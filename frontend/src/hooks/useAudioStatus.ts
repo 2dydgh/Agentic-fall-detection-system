@@ -6,7 +6,7 @@ export function useAudioStatus() {
   useEffect(() => {
     const fetchAudioStatus = async () => {
       try {
-        const res = await fetch("http://localhost:8000/api/audio_status");
+        const res = await fetch("/api/audio_status");
         const data = await res.json();
         setAudioEnabled(data.enabled);
       } catch { /* ignore */ }
@@ -18,7 +18,7 @@ export function useAudioStatus() {
 
   const toggleAudio = async () => {
     try {
-      const res = await fetch("http://localhost:8000/api/audio_toggle", { method: "POST" });
+      const res = await fetch("/api/audio_toggle", { method: "POST" });
       const data = await res.json();
       setAudioEnabled(data.enabled);
     } catch { /* ignore */ }

@@ -14,19 +14,19 @@ export function IncidentList({ incidents }: { incidents: Incident[] }) {
   return (
     <div className="flex flex-col h-full p-3">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-medium text-white">Incidents</span>
-        <span className="text-[10px] text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">{incidents.length}</span>
+        <span className="text-sm font-medium text-white">Incidents</span>
+        <span className="text-[12px] text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">{incidents.length}</span>
       </div>
 
       <div className="flex-1 overflow-y-auto space-y-1.5">
         {recent.length === 0 ? (
-          <span className="text-xs text-slate-600">No incidents</span>
+          <span className="text-sm text-slate-600">No incidents</span>
         ) : (
           recent.map((incident) => (
             <div key={incident.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/40">
               <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${severityDot(incident.severity)}`} />
-              <span className={`text-[11px] font-semibold w-12 ${severityColor(incident.severity)}`}>{incident.severity}</span>
-              <span className="text-[10px] text-slate-500 flex-1 truncate">
+              <span className={`text-[13px] font-semibold w-12 ${severityColor(incident.severity)}`}>{incident.severity}</span>
+              <span className="text-[12px] text-slate-500 flex-1 truncate">
                 {incident.timestamp.split("T")[1]?.substring(0, 8) || incident.timestamp.split(" ")[1] || incident.timestamp}
               </span>
               <div className="flex items-center gap-1">
@@ -36,7 +36,7 @@ export function IncidentList({ incidents }: { incidents: Incident[] }) {
               <div className="w-10 h-1 bg-slate-700/50 rounded-full overflow-hidden">
                 <div className={`h-full rounded-full ${severityBar(incident.severity)}`} style={{ width: `${incident.score}%` }} />
               </div>
-              <span className={`text-[10px] font-medium w-5 text-right ${severityColor(incident.severity)}`}>{incident.score}</span>
+              <span className={`text-[12px] font-medium w-5 text-right ${severityColor(incident.severity)}`}>{incident.score}</span>
             </div>
           ))
         )}

@@ -7,7 +7,7 @@ export function useAgentResults() {
   useEffect(() => {
     const fetchAgentResults = async () => {
       try {
-        const res = await fetch("http://localhost:8000/api/agent_results");
+        const res = await fetch("/api/agent_results");
         const data = await res.json();
         if (data && Array.isArray(data.results)) setAgentResults(data.results);
       } catch { /* ignore */ }

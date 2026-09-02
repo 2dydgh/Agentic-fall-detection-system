@@ -53,6 +53,8 @@ class ActionNode:
                 audio_impact_detected=state.get("audio_impact_detected", False),
                 audio_confidence=state.get("audio_confidence", 0.0),
                 camera_id=state.get("camera_id", "01"),
+                attention_weights=state.get("attention_weights"),
+                decision_mode=state.get("decision_mode", "rule"),
             )
             actions_taken.append({"tool": "log_to_db", "incident_id": incident_id})
 

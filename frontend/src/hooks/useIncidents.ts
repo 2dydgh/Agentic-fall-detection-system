@@ -7,7 +7,7 @@ export function useIncidents() {
   useEffect(() => {
     const fetchIncidents = async () => {
       try {
-        const res = await fetch("http://localhost:8000/api/incidents");
+        const res = await fetch("/api/incidents");
         const data = await res.json();
         if (data && Array.isArray(data.logs)) setStats(data);
       } catch (error) {

@@ -17,9 +17,8 @@ export function CameraGrid({ incidents }: { incidents: Incident[] }) {
     const others = CAMERAS.filter((c) => c.id !== focusedId);
 
     return (
-      <div className="grid grid-cols-[3fr_1fr] gap-2 h-full min-h-0">
-        {/* Main camera */}
-        <div className="cursor-pointer min-h-0" onClick={() => handleClick(main.id)}>
+      <div className="grid grid-cols-[3fr_1fr] h-full min-h-0">
+        <div className="cursor-pointer min-h-0 border-r border-g-border" onClick={() => handleClick(main.id)}>
           <CameraCard
             id={main.id}
             label={main.label}
@@ -28,10 +27,9 @@ export function CameraGrid({ incidents }: { incidents: Incident[] }) {
             incidents={incidents}
           />
         </div>
-        {/* Side cameras */}
-        <div className="flex flex-col gap-2 min-h-0">
-          {others.map((cam) => (
-            <div key={cam.id} className="flex-1 min-h-0 cursor-pointer" onClick={() => handleClick(cam.id)}>
+        <div className="flex flex-col min-h-0">
+          {others.map((cam, i) => (
+            <div key={cam.id} className={`flex-1 min-h-0 cursor-pointer ${i > 0 ? "border-t border-g-border" : ""}`} onClick={() => handleClick(cam.id)}>
               <CameraCard
                 id={cam.id}
                 label={cam.label}
@@ -48,9 +46,11 @@ export function CameraGrid({ incidents }: { incidents: Incident[] }) {
   }
 
   return (
-    <div className="grid grid-cols-2 grid-rows-2 gap-2 h-full min-h-0">
-      {CAMERAS.map((cam) => (
-        <div key={cam.id} className="cursor-pointer" onClick={() => handleClick(cam.id)}>
+    <div className="grid grid-cols-2 grid-rows-2 h-full min-h-0">
+      {CAMERAS.map((cam, i) => (
+        <div key={cam.id} className={`cursor-pointer ${
+          i % 2 === 0 ? "border-r border-g-border" : ""
+        } ${i < 2 ? "border-b border-g-border" : ""}`} onClick={() => handleClick(cam.id)}>
           <CameraCard
             id={cam.id}
             label={cam.label}

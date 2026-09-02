@@ -12,31 +12,33 @@ export function Header({ isAlert, currentTime, alertIncidents }: {
 }) {
   return (
     <header>
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-g-border">
+      <div className="flex items-center justify-between px-4 py-2 bg-g-panel border-b border-g-border">
         <div className="flex items-center gap-3">
-          <span className="text-xl font-bold text-g-orange tracking-wide">DETECT</span>
-          <span className="text-base text-g-muted">Agentic Fall Detection</span>
+          <span className="text-[14px] font-semibold text-g-text">Agentic Safety Intelligence</span>
+          <span className="text-[12px] text-g-muted bg-g-surface px-1.5 py-0.5 font-mono rounded-md">Ontology · LangGraph</span>
         </div>
-        <div className="flex items-center gap-5">
-          <span className="text-base text-g-muted tabular-nums font-mono">{currentTime}</span>
-          <div className={`flex items-center gap-2 text-base font-semibold ${isAlert ? "text-g-red" : "text-g-green"}`}>
-            <span className={`h-2.5 w-2.5 rounded-full ${isAlert ? "bg-g-red animate-pulse" : "bg-g-green"}`} />
-            {isAlert ? "ALERT" : "Online"}
+        <div className="flex items-center gap-4">
+          <span className="text-[14px] text-g-text-secondary tabular-nums font-mono">{currentTime}</span>
+          <div className={`flex items-center gap-2 text-[14px] font-semibold px-2.5 py-1 rounded-md ${
+            isAlert ? "bg-g-red/15 text-g-red" : "bg-g-surface text-g-green"
+          }`}>
+            <span className={`h-2 w-2 rounded-full ${isAlert ? "bg-g-red animate-pulse" : "bg-g-green"}`} />
+            {isAlert ? "경고 발생" : "정상 운영"}
           </div>
         </div>
       </div>
 
       {isAlert && alertIncidents.length > 0 && (
-        <div className="flex items-center justify-center gap-5 px-4 py-2 bg-g-red/10 border-b border-g-red/30">
-          <span className="text-g-red text-base font-bold tracking-widest alert-text">
-            FALL DETECTED
+        <div className="flex items-center justify-center gap-5 px-4 py-2 bg-g-sev-high border-b border-g-red/30">
+          <span className="text-white text-[14px] font-bold tracking-widest">
+            낙상 감지
           </span>
           {alertIncidents.map((inc) => (
-            <span key={inc.id} className="flex items-center gap-2 text-base">
-              <span className="w-2 h-2 rounded-full bg-g-red animate-pulse" />
-              <span className="text-g-red font-semibold">CAM {inc.camera_id}</span>
-              <span className="text-g-muted">{CAMERA_LABELS[inc.camera_id]}</span>
-              <span className="text-g-red font-mono font-bold">{inc.score}</span>
+            <span key={inc.id} className="flex items-center gap-2 text-[14px]">
+              <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+              <span className="text-white font-semibold">CAM {inc.camera_id}</span>
+              <span className="text-white/70">{CAMERA_LABELS[inc.camera_id]}</span>
+              <span className="text-white font-mono font-bold">{inc.score}점</span>
             </span>
           ))}
         </div>

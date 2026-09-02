@@ -14,7 +14,7 @@
 
 <br/>
 
-> 단순한 룰 기반 탐지를 넘어, **지각(Perceive) → 분석(Analyze) → 판단(Decide) → 행동(Act)** 의 자율적 사이클로 동작하는 엔터프라이즈급 실시간 낙상 관제 시스템
+> 멀티모달 후기 융합(영상·음성·VLM)과 온톨로지 규칙 추론으로<br/>판단 근거까지 반환하는 **2-Track 실시간 낙상 관제 시스템**
 
 </div>
 
@@ -27,6 +27,41 @@
   <br/>
   <sub><b>다중 구역(Multi-Zone) 모니터링 관제 대시보드</b><br/>복도·병실·야외·화장실 4개 CCTV를 실시간 관제하는 Grafana 스타일 통합 대시보드</sub>
 </div>
+
+### 웹 대시보드
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="figures/ui_dashboard.png" alt="대시보드" width="100%" /><br/>
+      <sub><b>실시간 관제 대시보드</b> — 4개 카메라 동시 모니터링, 사건 현황, 실시간 모니터링 테이블</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="figures/ui_incidents.png" alt="사건 기록" width="100%" /><br/>
+      <sub><b>사건 기록</b> — 심각도·카메라·시간순 필터링, 판정 모드·오디오 정보 포함</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="figures/ui_analytics.png" alt="분석" width="100%" /><br/>
+      <sub><b>분석</b> — OWL 온톨로지 계층 트리 + 심각도 분포·판정 모드·카메라별 사건 차트</sub>
+    </td>
+    <td align="center">
+      <img src="figures/ui_architecture.png" alt="시스템 아키텍처" width="100%" /><br/>
+      <sub><b>시스템 아키텍처</b> — LangGraph 파이프라인 시각화, 2-Track 판정 구조</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="figures/ui_ontology.png" alt="온톨로지 시뮬레이터" width="100%" /><br/>
+      <sub><b>온톨로지 시뮬레이터</b> — 구역·인물·자세·소리 조건을 조합해 Prolog 규칙 발동 결과 확인</sub>
+    </td>
+    <td align="center">
+      <img src="figures/ui_ontology_graph.png" alt="개념 관계도" width="100%" /><br/>
+      <sub><b>개념 관계도</b> — RDF/OWL 온톨로지의 38개 개념·9개 관계를 계층 트리로 시각화</sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -76,6 +111,14 @@ CCTV 영상과 오디오로 낙상을 감지하고, 심각도를 판정해 대�
 ```
 
 설계 근거와 각 노드의 상세는 **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** 참고.
+
+### 온톨로지 개념 관계도
+
+<div align="center">
+  <img src="figures/ontology_graph.png" alt="온톨로지 개념 관계도" width="900" />
+  <br/>
+  <sub><b>RDF/OWL 온톨로지 계층</b> — 38개 개념 · 9개 관계 · Prolog 규칙이 이 계층을 따라 <code>is_a/2</code>로 추론한다</sub>
+</div>
 
 ## 빠른 시작
 
@@ -131,6 +174,52 @@ S8 (복도 12초 무동작)   이력 없음 → LOW
 ```bash
 python -m scripts.compare_modes      # 비교 실험 재실행 (임시 DB 사용)
 ```
+
+## 왜 온톨로지인가
+
+### 네 가지 접근의 위치
+
+네 모드는 진화 라인이 아니라, 같은 문제에 대한 **서로 다른 접근**이다.
+
+```
+rule ──(학습으로 개선)──▶ attention     "현재 프레임 → 점수" 구조
+                                        설명 불가, 이력 불가
+
+llm  ──(자연어 판단)──                  설명은 하지만 사후 합리화, 이력 불가
+
+ontology ──(기호 추론)──                 설명 가능 + 이력 반영 + 재현성
+```
+
+- `rule`은 대조군(baseline)이다. `attention`은 같은 구조에서 융합만 학습으로 개선한 것이다.
+- `llm`은 자연어로 판단 근거를 생성하지만, **사후 합리화(post-hoc rationalization)**
+  문제가 있다. 판정을 먼저 내리고 이유를 나중에 만들어내므로 "이 이유로 이 판정을 한
+  것인지" 보장할 수 없다.
+- `ontology`는 반대다. **규칙이 발동했기 때문에 판정이 나온 것**이므로 인과 관계가 명확하다.
+
+### Neuro-Symbolic 구조
+
+이 프로젝트의 아키텍처는 Neuro-Symbolic AI에 해당한다.
+
+```
+[Neural — 지각]                          [Symbolic — 판단]
+
+YOLO11n   → "사람이 쓰러졌다" (포즈)  ─┐
+YAMNet    → "비명이 들렸다" (소리)    ─┤→  Prolog 규칙 추론 → "HIGH, R5 발동"
+Florence-2 → "욕실에 노인이 있다" (맥락) ─┘
+```
+
+신경망(YOLO, YAMNet, Florence-2)이 지각을 담당하고, 기호 추론(RDF/OWL + Prolog)이
+판단을 담당한다. Florence-2는 판단을 하지 않는다 — 장면 캡셔닝 한 줄을 뽑아서 판단
+노드에 **맥락 정보**로 전달하는 역할이다.
+
+### 온톨로지 모드만 할 수 있는 것
+
+| 시나리오 | rule / attention / llm | ontology |
+|---|---|---|
+| "왜 HIGH인가?" | 점수, weight, 자연어 | **R5 발동 (조건 명시)** |
+| 같은 장소 3일 내 재낙상 | 판별 불가 (현재 프레임만) | **r6, r13 발동** |
+| 새 구역 추가 (수영장) | 코드 수정 / 재학습 / 프롬프트 수정 | **TTL에 한 줄 추가** |
+| 규칙 감사 | 코드를 읽어야 함 | **rules.pl 16개 열거** |
 
 ## 기술 스택
 

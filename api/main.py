@@ -102,6 +102,14 @@ def get_recent_incidents(limit: int = 20):
         formatted_logs = []
         for log in logs:
             d = dict(log)
+            attn_raw = d.get("attention_weights")
+            attn = None
+            if attn_raw:
+                try:
+                    attn = json.loads(attn_raw) if isinstance(attn_raw, str) else attn_raw
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
             formatted_logs.append({
                 "id": d.get("incident_id", str(d.get("id"))),
                 "camera_id": d.get("camera_id", "01"),
@@ -111,6 +119,8 @@ def get_recent_incidents(limit: int = 20):
                 "audio_scream": bool(d.get("audio_scream_detected", 0)),
                 "audio_impact": bool(d.get("audio_impact_detected", 0)),
                 "audio_confidence": d.get("audio_confidence", 0.0),
+                "attention_weights": attn,
+                "decision_mode": d.get("decision_mode", "rule"),
             })
 
         return {
@@ -202,6 +212,7 @@ class VideoStream:
             # Camera
             "camera_id": self.camera_id,
             # Decision Mode
+            "decision_mode": "ontology",
             "use_llm_decision": False,
             # Audio
             "audio_chunk": None,
@@ -367,22 +378,28 @@ def seed_demo_data():
     conn = get_db_connection()
 
     samples = [
-        ("01", "HIGH",   92, "Elder person fell near staircase. No movement for 8s."),
-        ("01", "HIGH",   87, "Individual collapsed in corridor. Possible head injury."),
-        ("02", "MEDIUM", 65, "Person slipped in bathroom. Sitting on floor."),
-        ("03", "MEDIUM", 58, "Subject fell near entrance. Got up after 3s."),
-        ("02", "LOW",    32, "Person crouched quickly. Recovered immediately."),
-        ("03", "HIGH",   95, "Fall detected in living room. No response for 12s."),
+        ("01", "HIGH",   92, "Elder person fell near staircase. No movement for 8s.",
+         '{"pose": 0.5512, "audio": 0.2834, "vlm": 0.1654}', "attention"),
+        ("01", "HIGH",   87, "Individual collapsed in corridor. Possible head injury.",
+         '{"pose": 0.6340, "audio": 0.2108, "vlm": 0.1552}', "attention"),
+        ("02", "MEDIUM", 65, "Person slipped in bathroom. Sitting on floor.",
+         '{"pose": 0.4925, "audio": 0.1580, "vlm": 0.3495}', "attention"),
+        ("03", "MEDIUM", 58, "Subject fell near entrance. Got up after 3s.",
+         '{"pose": 0.6800, "audio": 0.1750, "vlm": 0.1450}', "attention"),
+        ("02", "LOW",    32, "Person crouched quickly. Recovered immediately.",
+         None, "rule"),
+        ("03", "HIGH",   95, "Fall detected in living room. No response for 12s.",
+         '{"pose": 0.4210, "audio": 0.3890, "vlm": 0.1900}', "attention"),
     ]
 
     now = datetime.now()
-    for i, (cam_id, sev, score, desc) in enumerate(samples):
+    for i, (cam_id, sev, score, desc, attn, mode) in enumerate(samples):
         ts = now - timedelta(minutes=i * 7 + 2)
         inc_id = f"INC-{ts.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         try:
             conn.execute(
-                "INSERT INTO incidents (incident_id, camera_id, timestamp, severity, severity_score, scene_description, actions_taken) VALUES (?,?,?,?,?,?,?)",
-                (inc_id, cam_id, ts.isoformat(), sev, score, desc, '["log_to_db","save_snapshot","notify_security_room"]')
+                "INSERT INTO incidents (incident_id, camera_id, timestamp, severity, severity_score, scene_description, actions_taken, attention_weights, decision_mode) VALUES (?,?,?,?,?,?,?,?,?)",
+                (inc_id, cam_id, ts.isoformat(), sev, score, desc, '["log_to_db","save_snapshot","notify_security_room"]', attn, mode)
             )
         except Exception:
             pass  # 중복 무시

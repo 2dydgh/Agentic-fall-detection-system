@@ -12,7 +12,11 @@
 | **해결 방법** | LangGraph로 `PerceptionNode → AudioNode → AnalysisNode → DecisionNode → ActionNode` 파이프라인 구현 |
 | **핵심 효과** | 비전 + 오디오 멀티모달 Late Fusion, 장소/위험 요소에 따라 동적으로 **심각도(Severity) 점수** 산출 |
 
-> **결과:** 가짜 알람(False Positive) 대폭 감소 + 실제 위급 상황 감지 정확도 획기적 향상
+PerceptionNode는 **다중 신호 판정**으로 낙상을 감지한다. 단순 각도 임계치 대신 네 가지
+독립 신호(각도·높이 전이·하강 속도·종횡비)를 종합하여 카메라 앵글에 의한 미감지를
+보정한다. 상세는 [ARCHITECTURE.md](ARCHITECTURE.md#perceptionnode--다중-신호-낙상-감지) 참고.
+
+> **결과:** 가짜 알람(False Positive) 대폭 감소 + 카메라 앵글에 의한 미감지(False Negative) 보정
 
 ---
 
@@ -104,25 +108,32 @@ result = await loop.run_in_executor(executor, yolo_inference, frame)
 
 ---
 
-### 5. 포즈 추정 휴리스틱 튜닝 — False Positive 제거
+### 5. 포즈 추정 휴리스틱 튜닝 — False Positive/Negative 제거
 
 <details>
 <summary><b>낙상 판정 알고리즘 상세 (클릭하여 펼치기)</b></summary>
 
 ```
-공통적인 문제:
+False Positive (오탐) 방지:
   - 쪼그려 앉기(Squatting) → 낙상으로 오인 (기울기 유사)
   - 빠른 전진 동작 → 순간적으로 낙상 각도 통과
+  → 해결: 5프레임 연속 확인 + 60프레임 쿨다운
 
-해결 로직:
-  1. 신체 기울기(Angle) 임계치: 45° (기존 30° → 상향)
-  2. 즉발성 알람: 완전 제거
-  3. 지속 시간 조건: 0.75초(15프레임) 이상 바닥 평행 상태 유지 시에만 낙상 판정
+False Negative (미감지) 방지:
+  - 카메라를 정면으로 향한 상태에서 쓰러짐 → 각도가 작게 측정됨
+  - 느린 주저앉기 → 단일 임계치로 잡히지 않음
+  → 해결: 다중 신호 판정 (각도·높이 전이·하강 속도·종횡비)
+
+핵심 로직:
+  1. 4개 독립 신호 중 1개 이상 충족 시 낙상 후보
+  2. 5프레임 연속 유지 시 최종 낙상 판정
+  3. 판정 후 60프레임 쿨다운으로 중복 감지 방지
+  4. 서 있을 때 코 Y좌표를 EMA(α=0.2)로 추적하여 높이 전이 기준 유지
 ```
 
 </details>
 
-> **결과:** 일상 동작과 실제 낙상의 완벽한 구분, 견고한 탐지 정확도 확보
+> **결과:** 일상 동작 오탐 방지 + 카메라 앵글에 의한 미감지 보정. 상세는 [ARCHITECTURE.md](ARCHITECTURE.md#perceptionnode--다중-신호-낙상-감지) 참고.
 
 ---
 

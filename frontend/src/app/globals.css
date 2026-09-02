@@ -1,25 +1,43 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
-  --color-g-bg: #111217;
-  --color-g-panel: #181b1f;
-  --color-g-border: #2a2d35;
-  --color-g-border2: #34383f;
-  --color-g-text: #d8d9da;
-  --color-g-muted: #8e8e8e;
-  --color-g-orange: #ff6600;
-  --color-g-green: #73bf69;
-  --color-g-red: #f2495c;
-  --color-g-blue: #5794f2;
-  --color-g-yellow: #fade2a;
+  /* ── Typography ── */
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+  --font-mono: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+
+  /* ══ Primitive Tokens — Surface Scale ══ */
+  --color-g-bg: #111318;
+  --color-g-panel: #181b23;
+  --color-g-card: #1f232e;
+  --color-g-surface: #282d3a;
+  --color-g-border: #353b4a;
+  --color-g-border2: #454c5d;
+
+  /* ══ Primitive Tokens — Text Scale ══ */
+  --color-g-text: #e4e7ed;
+  --color-g-text-secondary: #b0b7c5;
+  --color-g-muted: #6e7687;
+
+  /* ══ Semantic Tokens — Accent Palette ══ */
+  --color-g-blue: #6e9ef8;
+  --color-g-green: #66c26a;
+  --color-g-red: #ef6e70;
+  --color-g-orange: #e89850;
+  --color-g-yellow: #d4b84e;
+  --color-g-purple: #a07ee8;
+  --color-g-pink: #d87ead;
+  --color-g-teal: #4dbba8;
+
+  /* ══ Component Tokens — Severity (aliased) ══ */
+  --color-g-sev-high: #ef6e70;
+  --color-g-sev-med: #e89850;
+  --color-g-sev-low: #66c26a;
 }
 
 body {
   background: var(--color-g-bg);
   color: var(--color-g-text);
-  font-family: var(--font-sans), system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 
 /* Scrollbar */
@@ -30,14 +48,14 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #34383f;
+  background: var(--color-g-border2);
   border-radius: 2px;
 }
 
 /* Alert pulse animation for camera borders */
 @keyframes alert-pulse {
-  0%, 100% { border-color: #f2495c; }
-  50% { border-color: rgba(242, 73, 92, 0.3); }
+  0%, 100% { border-color: var(--color-g-red); }
+  50% { border-color: rgba(239, 110, 112, 0.3); }
 }
 
 .alert-pulse {
@@ -56,8 +74,8 @@ body {
 
 /* Text glow for HIGH severity */
 @keyframes alert-text-glow {
-  0%, 100% { text-shadow: 0 0 10px rgba(242, 73, 92, 0.8), 0 0 30px rgba(242, 73, 92, 0.4); }
-  50% { text-shadow: 0 0 20px rgba(242, 73, 92, 1), 0 0 50px rgba(242, 73, 92, 0.6); }
+  0%, 100% { text-shadow: 0 0 10px rgba(239, 110, 112, 0.8), 0 0 30px rgba(239, 110, 112, 0.4); }
+  50% { text-shadow: 0 0 20px rgba(239, 110, 112, 1), 0 0 50px rgba(239, 110, 112, 0.6); }
 }
 
 .alert-text {

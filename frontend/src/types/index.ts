@@ -1,3 +1,9 @@
+export type AttentionWeights = {
+  pose: number;
+  audio: number;
+  vlm: number;
+};
+
 export type Incident = {
   id: string;
   camera_id: string;
@@ -7,6 +13,8 @@ export type Incident = {
   audio_scream: boolean;
   audio_impact: boolean;
   audio_confidence: number;
+  attention_weights: AttentionWeights | null;
+  decision_mode: string;
 };
 
 export type Stats = {
