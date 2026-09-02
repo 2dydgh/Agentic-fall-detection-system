@@ -23,7 +23,7 @@
 ## 시스템 구동 화면
 
 <div align="center">
-  <img src="figures/demo_large.gif" alt="System Demo" width="1000" />
+  <img src="figures/demo_new.gif" alt="System Demo" width="1000" />
   <br/>
   <sub><b>다중 구역(Multi-Zone) 모니터링 관제 대시보드</b><br/>복도·병실·야외·화장실 4개 CCTV를 실시간 관제하는 Grafana 스타일 통합 대시보드</sub>
 </div>
